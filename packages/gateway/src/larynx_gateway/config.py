@@ -1,0 +1,45 @@
+"""Environment-driven settings for the gateway."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=(".env", "../../.env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # Auth
+    larynx_api_token: str = Field(
+        default="change-me-please",
+        description="Bearer token required by every /v1/* endpoint.",
+    )
+
+    # TTS worker
+    larynx_tts_mode: str = Field(default="mock")  # "mock" | "voxcpm"
+    larynx_voxcpm_gpu: int = 0
+    larynx_default_sample_rate: int = 24000
+
+    # Storage
+    database_url: str = "postgresql+psycopg://larynx:larynx@localhost:5433/larynx"
+    redis_url: str = "redis://localhost:6380/0"
+
+    # Logging
+    larynx_log_level: str = "INFO"
+    larynx_log_json: bool = True
+
+    # Bind
+    larynx_host: str = "0.0.0.0"
+    larynx_port: int = 8000
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()
