@@ -1,20 +1,40 @@
-# venvs and caches
-.venv/
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.venv/
+venv/
 
-# local external clones (not part of this repo)
-Fun-ASR-vllm/
+# uv
+uv.lock.bak
 
-# HF / model caches that may land in cwd
-.cache/
-huggingface/
-modelscope/
+# Env
+.env
+.env.local
 
-# editor
+# Data / outputs
+/data/
+/outputs/
+/latent_cache/
+/lora_weights/
+*.wav
+*.mp3
+!packages/gateway/tests/fixtures/*.wav
+
+# Editor
 .vscode/
 .idea/
 *.swp
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+Thumbs.db

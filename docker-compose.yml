@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: larynx-postgres
+    environment:
+      POSTGRES_USER: larynx
+      POSTGRES_PASSWORD: larynx
+      POSTGRES_DB: larynx
+    ports:
+      - "5433:5432"
+    volumes:
+      - larynx-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U larynx -d larynx"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: larynx-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - larynx-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  larynx-postgres-data:
+  larynx-redis-data:
