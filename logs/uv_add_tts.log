@@ -1,0 +1,82 @@
+warning: Failed to parse `pyproject.toml` during settings discovery:
+  TOML parse error at line 11, column 14
+     |
+  11 | flash-attn = [
+     |              ^
+  data did not match any variant of untagged enum ExtraBuildDependencyWire
+
+Resolved 89 packages in 13ms
+   Building flash-attn==2.8.3
+Downloading nvidia-nvshmem-cu13 (57.6MiB)
+Downloading tokenizers (3.1MiB)
+Downloading nvidia-cuda-cupti (10.2MiB)
+Downloading nvidia-nccl-cu13 (187.4MiB)
+Downloading nvidia-cuda-nvrtc (86.0MiB)
+Downloading numpy (15.9MiB)
+Downloading nvidia-cusolver (191.6MiB)
+Downloading llvmlite (53.7MiB)
+Downloading cuda-bindings (6.0MiB)
+Downloading scikit-learn (8.5MiB)
+Downloading scipy (33.6MiB)
+Downloading nvidia-curand (56.8MiB)
+Downloading torch (506.1MiB)
+Downloading nvidia-cuda-runtime (2.1MiB)
+Downloading triton (179.5MiB)
+Downloading numba (3.6MiB)
+Downloading nvidia-cusparselt-cu13 (162.0MiB)
+Downloading nvidia-cufft (204.2MiB)
+Downloading nvidia-nvjitlink (38.8MiB)
+Downloading nvidia-cublas (403.5MiB)
+Downloading nvidia-cudnn-cu13 (349.1MiB)
+Downloading sympy (6.0MiB)
+Downloading transformers (9.8MiB)
+Downloading torchcodec (2.2MiB)
+Downloading hf-xet (4.0MiB)
+Downloading nvidia-cusparse (139.2MiB)
+  × Failed to build `flash-attn==2.8.3`
+  ├─▶ The build backend returned an error
+  ╰─▶ Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit
+      status: 1)
+
+      [stderr]
+      /home/ripper/.cache/uv/builds-v0/.tmpv5SmTT/lib/python3.12/site-packages/setuptools/_vendor/wheel/bdist_wheel.py:4:
+      FutureWarning: The 'wheel' package is no longer the canonical location
+      of the 'bdist_wheel' command, and will be removed in a future release.
+      Please update to setuptools v70.1 or later which contains an integrated
+      version of this command.
+        warn(
+      Traceback (most recent call last):
+        File "<string>", line 14, in <module>
+        File
+      "/home/ripper/.cache/uv/builds-v0/.tmpv5SmTT/lib/python3.12/site-packages/setuptools/build_meta.py",
+      line 333, in get_requires_for_build_wheel
+          return self._get_build_requires(config_settings, requirements=[])
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        File
+      "/home/ripper/.cache/uv/builds-v0/.tmpv5SmTT/lib/python3.12/site-packages/setuptools/build_meta.py",
+      line 301, in _get_build_requires
+          self.run_setup()
+        File
+      "/home/ripper/.cache/uv/builds-v0/.tmpv5SmTT/lib/python3.12/site-packages/setuptools/build_meta.py",
+      line 520, in run_setup
+          super().run_setup(setup_script=setup_script)
+        File
+      "/home/ripper/.cache/uv/builds-v0/.tmpv5SmTT/lib/python3.12/site-packages/setuptools/build_meta.py",
+      line 317, in run_setup
+          exec(code, locals())
+        File "<string>", line 22, in <module>
+      ModuleNotFoundError: No module named 'torch'
+
+      hint: This error likely indicates that `flash-attn@2.8.3` depends
+      on `torch`, but doesn't declare it as a build dependency. If
+      `flash-attn` is a first-party package, consider adding `torch`
+      to its `build-system.requires`. Otherwise, either add it to your
+      `pyproject.toml` under:
+
+      [tool.uv.extra-build-dependencies]
+      flash-attn = ["torch"]
+
+      or `uv pip install torch` into the environment and re-run with
+      `--no-build-isolation`.
+  help: If you want to add the package regardless of the failed resolution,
+        provide the `--frozen` flag to skip locking and syncing.

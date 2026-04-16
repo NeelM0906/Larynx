@@ -1,0 +1,95 @@
+Resolved 1 package in 78ms
+   Building nvidia-cuda-nvcc-cu13==0.0.1
+  × Failed to build `nvidia-cuda-nvcc-cu13==0.0.1`
+  ├─▶ The build backend returned an error
+  ╰─▶ Call to `setuptools.build_meta.build_wheel` failed (exit status: 1)
+
+      [stderr]
+      ⚠️ THIS PROJECT 'nvidia-cuda-nvcc-cu13' IS DEPRECATED.
+      Please use 'nvidia-cuda-nvcc' instead.
+
+      To install the correct package, use:
+
+          pip install nvidia-cuda-nvcc
+
+      For more information, visit: https://pypi.org/project/nvidia-cuda-nvcc/
+
+
+
+      hint: This usually indicates a problem with the package or the build
+      environment.
+Resolved 4 packages in 78ms
+Downloading nvidia-nvvm (61.3MiB)
+Downloading nvidia-cuda-nvcc (42.0MiB)
+ Downloaded nvidia-cuda-nvcc
+ Downloaded nvidia-nvvm
+Prepared 3 packages in 1.10s
+Installed 3 packages in 2ms
+ + nvidia-cuda-crt==13.2.78
+ + nvidia-cuda-nvcc==13.2.78
+ + nvidia-nvvm==13.2.78
+Resolved 1 package in 88ms
+   Building nvidia-cuda-cccl-cu13==0.0.1
+  × Failed to build `nvidia-cuda-cccl-cu13==0.0.1`
+  ├─▶ The build backend returned an error
+  ╰─▶ Call to `setuptools.build_meta.build_wheel` failed (exit status: 1)
+
+      [stderr]
+      ⚠️ THIS PROJECT 'nvidia-cuda-cccl-cu13' IS DEPRECATED.
+      Please use 'nvidia-cuda-cccl' instead.
+
+      To install the correct package, use:
+
+          pip install nvidia-cuda-cccl
+
+      For more information, visit: https://pypi.org/project/nvidia-cuda-cccl/
+
+
+
+      hint: This usually indicates a problem with the package or the build
+      environment.
+  × No solution found when resolving dependencies:
+  ╰─▶ Because nvidia-cudart was not found in the package registry and you
+      require nvidia-cudart, we can conclude that your requirements are
+      unsatisfiable.
+Resolved 1 package in 0.88ms
+Downloading nvidia-cuda-cccl (3.4MiB)
+ Downloaded nvidia-cuda-cccl
+Prepared 1 package in 199ms
+Installed 1 package in 12ms
+ + nvidia-cuda-cccl==13.2.75
+Resolved 5 packages in 1ms
+Downloading nvidia-cuda-cccl (3.0MiB)
+Downloading nvidia-cuda-nvcc (35.7MiB)
+ Downloaded nvidia-cuda-cccl
+ Downloaded nvidia-cuda-nvcc
+Prepared 2 packages in 743ms
+Uninstalled 2 packages in 9ms
+Installed 2 packages in 11ms
+ - nvidia-cuda-cccl==13.2.75
+ + nvidia-cuda-cccl==13.0.85
+ - nvidia-cuda-nvcc==13.2.78
+ + nvidia-cuda-nvcc==13.0.88
+Resolved 2 packages in 0.78ms
+Downloading nvidia-nvvm (58.7MiB)
+ Downloaded nvidia-nvvm
+Prepared 2 packages in 1.27s
+Uninstalled 2 packages in 4ms
+Installed 2 packages in 3ms
+ - nvidia-cuda-crt==13.2.78
+ + nvidia-cuda-crt==13.0.88
+ - nvidia-nvvm==13.2.78
+ + nvidia-nvvm==13.0.88
+  × No solution found when resolving dependencies:
+  ╰─▶ Because nvidia-cuda-crt-cu12 was not found in the package registry and
+      you require nvidia-cuda-crt-cu12, we can conclude that your requirements
+      are unsatisfiable.
+Resolved 3 packages in 0.93ms
+Downloading nvidia-cuda-nvcc-cu12 (38.7MiB)
+Downloading nvidia-cuda-cccl-cu12 (3.0MiB)
+ Downloaded nvidia-cuda-cccl-cu12
+ Downloaded nvidia-cuda-nvcc-cu12
+Prepared 2 packages in 719ms
+Installed 2 packages in 11ms
+ + nvidia-cuda-cccl-cu12==12.9.27
+ + nvidia-cuda-nvcc-cu12==12.9.86

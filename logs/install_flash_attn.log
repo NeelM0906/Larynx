@@ -1,0 +1,15 @@
+Thu Apr 16 05:41:30 PM EDT 2026
+Resolved 31 packages in 70ms
+   Building flash-attn==2.8.3
+      Built flash-attn==2.8.3
+Prepared 1 package in 7.72s
+Installed 1 package in 1ms
+ + flash-attn==2.8.3
+EXIT=0
+error: The wheel filename "flash_attn_2.8.3.whl" is invalid: Must have a version
+Resolved 1 package in 1ms
+Prepared 1 package in 1.02s
+Uninstalled 1 package in 0.80ms
+Installed 1 package in 0.86ms
+ - flash-attn==2.8.3
+ + flash-attn==2.8.3+cu12torch2.9cxx11abitrue (from file:///tmp/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl)
