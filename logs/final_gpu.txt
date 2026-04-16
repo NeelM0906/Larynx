@@ -1,0 +1,5 @@
+torch 2.9.0+cu128
+cuda_available True
+device_count 2
+  gpu0: NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition sm_120 mem=95.0GiB
+  gpu1: NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition sm_120 mem=95.0GiB
