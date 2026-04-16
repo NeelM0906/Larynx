@@ -1,0 +1,28 @@
+[project]
+name = "larynx-voxcpm-worker"
+version = "0.1.0"
+description = "VoxCPM2 TTS worker (nano-vllm-voxcpm) for the Larynx platform."
+requires-python = ">=3.11"
+dependencies = [
+    "larynx-shared",
+    "numpy>=1.26",
+    "structlog>=24.1",
+]
+
+# nano-vllm-voxcpm is not pinned as a hard dependency because:
+#   (a) it requires CUDA / flash-attn and won't install on CPU-only dev boxes
+#   (b) the worker transparently falls back to `mock` mode when it can't import
+# Install it manually on the GPU box:
+#   uv pip install "nano-vllm-voxcpm @ git+https://github.com/.../nano-vllm-voxcpm"
+[project.optional-dependencies]
+gpu = []
+
+[project.scripts]
+larynx-voxcpm-worker = "larynx_voxcpm_worker.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/larynx_voxcpm_worker"]
