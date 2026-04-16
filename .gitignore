@@ -1,0 +1,20 @@
+# venvs and caches
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# local external clones (not part of this repo)
+Fun-ASR-vllm/
+
+# HF / model caches that may land in cwd
+.cache/
+huggingface/
+modelscope/
+
+# editor
+.vscode/
+.idea/
+*.swp
