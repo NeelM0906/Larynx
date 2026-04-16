@@ -40,6 +40,9 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# scripts/m0/ is an archived M0 milestone checkpoint (see scripts/m0/README.md);
+# we don't re-format the artifacts that validated the hardware.
+extend-exclude = ["scripts/m0"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B", "SIM"]
