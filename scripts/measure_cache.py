@@ -48,7 +48,9 @@ DATABASE_URL = os.environ.get(
 
 def _realistic_reference_wav() -> bytes:
     sr = 16000  # matches VoxCPM2 encoder native rate — no resample cost
-    t = np.linspace(0, 3.0, int(sr * 3.0), dtype=np.float32)
+    # 15s is close to the LibriVox clips `load_demo_voices.py` uses, so the
+    # encode cost we measure is representative of real voice uploads.
+    t = np.linspace(0, 15.0, int(sr * 15.0), dtype=np.float32)
     samples = (
         0.3 * np.sin(2 * np.pi * 180 * t)
         + 0.15 * np.sin(2 * np.pi * 500 * t)

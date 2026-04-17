@@ -133,19 +133,19 @@ class LatentCache:
         redis_hit = await self._get_from_redis(voice_id)
         if redis_hit is not None:
             _cache_hits.labels(tier="redis").inc()
-            log.debug("latent_cache.hit", voice_id=voice_id, tier="redis")
+            log.info("latent_cache.hit", voice_id=voice_id, tier="redis")
             return redis_hit
 
         disk_hit = self._get_from_disk(voice_id)
         if disk_hit is not None:
             _cache_hits.labels(tier="disk").inc()
-            log.debug("latent_cache.hit", voice_id=voice_id, tier="disk")
+            log.info("latent_cache.hit", voice_id=voice_id, tier="disk")
             # Re-warm Redis so the next request hits RAM.
             await self._put_to_redis(voice_id, disk_hit.latents, disk_hit.metadata)
             return disk_hit
 
         _cache_misses.inc()
-        log.debug("latent_cache.miss", voice_id=voice_id)
+        log.info("latent_cache.miss", voice_id=voice_id)
         return None
 
     async def _get_from_redis(self, voice_id: str) -> CacheResult | None:
