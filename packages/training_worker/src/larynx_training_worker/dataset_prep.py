@@ -5,20 +5,29 @@ time. It's the "did the user hand us something that could possibly
 train?" gate — structural only, no ASR, no network. Every rule comes
 from ORCHESTRATION-M7.md §2.1.
 
-Phase B (transcript-quality WER via Fun-ASR) and auto-transcription
-live separately; they run during the ``PREPARING`` state of a job, not
-on upload.
+Auto-transcription (``auto_transcribe_if_missing``) and Phase B
+transcript-quality WER live here too but run during ``PREPARING`` on
+the training_worker side, not at upload.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import pathlib
+from collections.abc import Awaitable, Callable
 
 import numpy as np
 import soundfile as sf
 from larynx_shared.paths import SUPPORTED_AUDIO_SUFFIXES, DatasetPaths
 from pydantic import BaseModel, Field
+
+_log = logging.getLogger(__name__)
+
+# Fun-ASR expects 16 kHz mono int16 PCM at the wire — we normalise
+# every audio file to that shape before calling the transcribe hook so
+# the caller never has to branch on input sample rate.
+_TRANSCRIBE_SR = 16_000
 
 # ---------------------------------------------------------------------------
 # Defaults (ORCHESTRATION-M7.md §10)
@@ -249,6 +258,70 @@ def _validate_transcripts(
         )
 
     return issues
+
+
+TranscribeHook = Callable[[bytes, int], Awaitable[str]]
+
+
+async def auto_transcribe_if_missing(
+    dataset: DatasetPaths,
+    *,
+    transcribe: TranscribeHook,
+) -> int:
+    """Generate ``transcripts.jsonl`` if the dataset arrived without one.
+
+    For each audio file in sorted order:
+      1. decode to 16 kHz mono int16 PCM (what Fun-ASR expects)
+      2. call ``transcribe(pcm, sr)``
+      3. append a row ``{"audio": <absolute path>, "text": ...}``
+
+    Returns the number of rows written. Returns 0 (no-op) if the
+    manifest already exists — see the invariant in ORCHESTRATION-M7.md
+    §2.3: the training script always reads a manifest, and
+    auto-transcription is idempotent on re-submission.
+
+    Individual transcription failures are logged + recorded as an empty
+    ``text`` field (rather than raising). The training script will
+    then reject the job during dataset load, which is the correct
+    behaviour — a dataset with a silent file deserves a visible error,
+    not a rolled-back preparation step.
+    """
+    if dataset.has_transcripts():
+        return 0
+
+    rows: list[dict[str, str]] = []
+    for audio_path in sorted(dataset.audio_files()):
+        try:
+            pcm, sr = _load_as_16k_s16_pcm(audio_path)
+            text = await transcribe(pcm, sr)
+        except Exception as e:  # noqa: BLE001
+            _log.warning("auto_transcribe.file_failed path=%s error=%s", audio_path, e)
+            text = ""
+        rows.append({"audio": str(audio_path), "text": text})
+
+    with dataset.transcripts_jsonl.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    return len(rows)
+
+
+def _load_as_16k_s16_pcm(path: pathlib.Path) -> tuple[bytes, int]:
+    samples, sr = sf.read(str(path), dtype="float32", always_2d=False)
+    if samples.ndim > 1:
+        samples = samples.mean(axis=1)
+    if sr != _TRANSCRIBE_SR:
+        # Pure-numpy linear resample — cheap, avoids dragging librosa
+        # into the worker's hot path. Good enough for ASR; the actual
+        # training dataset loader owns its own (higher-quality)
+        # resampling via HuggingFace's Audio column.
+        ratio = _TRANSCRIBE_SR / sr
+        n_out = int(round(len(samples) * ratio))
+        x_src = np.linspace(0.0, 1.0, len(samples), endpoint=False, dtype=np.float64)
+        x_dst = np.linspace(0.0, 1.0, n_out, endpoint=False, dtype=np.float64)
+        samples = np.interp(x_dst, x_src, samples).astype(np.float32)
+    pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+    return pcm, _TRANSCRIBE_SR
 
 
 def _resolve_manifest_audio(dataset: DatasetPaths, audio: str) -> pathlib.Path:

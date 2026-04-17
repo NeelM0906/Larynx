@@ -37,7 +37,10 @@ from larynx_training_worker.config_builder import (
     build_training_config,
     write_training_config,
 )
-from larynx_training_worker.dataset_prep import validate_dataset_phase_a
+from larynx_training_worker.dataset_prep import (
+    auto_transcribe_if_missing,
+    validate_dataset_phase_a,
+)
 from larynx_training_worker.subprocess_runner import (
     RunnerOutcome,
     run_training_subprocess,
@@ -75,6 +78,7 @@ _SUBPROCESS_ERROR_CODES: dict[RunnerOutcome, str] = {
 
 SubprocessHook = Callable[..., Awaitable[RunnerOutcome]]
 LoadLoraHook = Callable[[str, str], Awaitable[None]]
+TranscribeHook = Callable[[bytes, int], Awaitable[str]]
 
 
 async def run_job(
@@ -89,6 +93,7 @@ async def run_job(
     cancel_event: asyncio.Event,
     subprocess_hook: SubprocessHook | None = None,
     load_lora_hook: LoadLoraHook | None = None,
+    transcribe_hook: TranscribeHook | None = None,
     wall_timeout_seconds: int = 86_400,
     cancel_grace_seconds: int = 30,
 ) -> JobRunResult:
@@ -141,6 +146,24 @@ async def run_job(
         if cancel_event.is_set():
             await _transition(session, job, state="CANCELLED", finished_at=_utcnow())
             return JobRunResult.CANCELLED
+
+        # Auto-transcribe if the upload didn't include a manifest.
+        # Opt-in via transcribe_hook — production passes a closure
+        # that wraps FunASRClient.transcribe; tests pass a fake or
+        # ``None`` (in which case Phase A has already decided whether
+        # the dataset is training-ready).
+        if transcribe_hook is not None and not dataset_paths.has_transcripts():
+            try:
+                n_rows = await auto_transcribe_if_missing(dataset_paths, transcribe=transcribe_hook)
+                log.info("training.auto_transcribed", job_id=job_id, rows=n_rows)
+            except Exception as e:  # noqa: BLE001
+                await _fail(
+                    session,
+                    job,
+                    error_code="auto_transcribe_failed",
+                    error_detail=str(e),
+                )
+                return JobRunResult.FAILED
 
         try:
             overrides = json.loads(job.config_json or "{}")

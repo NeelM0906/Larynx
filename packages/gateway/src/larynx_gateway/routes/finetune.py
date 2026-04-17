@@ -31,7 +31,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from larynx_gateway.auth import require_bearer_token
 from larynx_gateway.db.models import FineTuneJob
 from larynx_gateway.db.session import get_session
-from larynx_gateway.deps import get_data_dir, get_db_session, get_voxcpm_client
+from larynx_gateway.deps import (
+    get_data_dir,
+    get_db_session,
+    get_funasr_client,
+    get_voxcpm_client,
+)
 from larynx_gateway.schemas.finetune import (
     DatasetUploadResponse,
     FineTuneJobCreateRequest,
@@ -40,6 +45,7 @@ from larynx_gateway.schemas.finetune import (
 )
 from larynx_gateway.services.training_logs import TrainingLogStore
 from larynx_gateway.services.training_orchestrator import JobRunResult, run_job
+from larynx_gateway.workers_client.funasr_client import FunASRClient
 from larynx_gateway.workers_client.voxcpm_client import VoxCPMClient
 
 router = APIRouter(prefix="/v1/finetune", tags=["finetune"])
@@ -237,6 +243,7 @@ async def create_job(
     session: AsyncSession = Depends(get_db_session),
     data_dir: pathlib.Path = Depends(get_data_dir),
     voxcpm_client: VoxCPMClient = Depends(get_voxcpm_client),
+    funasr_client: FunASRClient = Depends(get_funasr_client),
 ) -> FineTuneJobCreateResponse:
     """Persist a ``FineTuneJob(state=QUEUED)`` row and spawn the
     orchestrator task in the background.
@@ -292,6 +299,10 @@ async def create_job(
         async def load_lora_proxy(name: str, path: str) -> None:
             await voxcpm_client.load_lora(name, path)
 
+        async def transcribe_proxy(pcm: bytes, sample_rate: int) -> str:
+            resp = await funasr_client.transcribe(pcm_s16le=pcm, sample_rate=sample_rate)
+            return resp.text
+
         def _progress_observer(step: int) -> None:
             h = handle_ref[0]
             if h is not None:
@@ -312,6 +323,7 @@ async def create_job(
                     if hook is not None
                     else _default_hook(_progress_observer),
                     load_lora_hook=load_lora_proxy,
+                    transcribe_hook=transcribe_proxy,
                 )
             finally:
                 registry.pop(job_id, None)
