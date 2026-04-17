@@ -91,6 +91,10 @@ dev = [
     # aiosqlite is the async driver used by the test fixture's in-memory DB.
     # Production uses psycopg on Postgres.
     "aiosqlite>=0.20",
+    # OpenAI Python SDK — exercised by the M8 Part B round-trip test
+    # (test_openai_sdk_speech*.py). Keeps the SDK out of runtime deps; only
+    # tests marked ``@pytest.mark.openai_sdk`` reach for it.
+    "openai>=1.40",
 ]
 
 [tool.ruff]
@@ -126,5 +130,6 @@ testpaths = [
 markers = [
     "real_model: requires the real VoxCPM2 / Fun-ASR model on GPU (opt-in via RUN_REAL_MODEL=1)",
     "real_train: requires a real LoRA training run on GPU (opt-in via RUN_REAL_TRAIN=1)",
+    "openai_sdk: exercises the upstream OpenAI Python SDK against a live gateway (opt-in)",
 ]
-addopts = "-m 'not real_model and not real_train'"
+addopts = "-m 'not real_model and not real_train and not openai_sdk'"
