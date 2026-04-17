@@ -29,6 +29,7 @@ from larynx_gateway.db.session import dispose_engine, init_engine
 from larynx_gateway.logging import configure_logging
 from larynx_gateway.routes import health, stt, stt_stream, tts, tts_stream, voices
 from larynx_gateway.services.latent_cache import LatentCache, build_redis_client
+from larynx_gateway.services.llm_client import LLMClient
 from larynx_gateway.services.voice_files import resolve_data_dir
 from larynx_gateway.workers_client.base import WorkerChannel
 from larynx_gateway.workers_client.funasr_client import FunASRClient
@@ -114,6 +115,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.vad_punc_worker = vad_punc_worker
     app.state.vad_punc_client = vad_punc_client
 
+    # LLM client (OpenRouter). Shared across conversation sessions; one
+    # httpx connection pool per gateway process. API key can be empty
+    # during non-M5 test runs — the client only blows up on first use.
+    llm_client = LLMClient(
+        api_key=settings.larynx_openrouter_api_key,
+        base_url=settings.larynx_openrouter_base_url,
+        http_referer=settings.larynx_openrouter_http_referer or None,
+        x_title=settings.larynx_openrouter_x_title or None,
+    )
+    app.state.llm_client = llm_client
+    app.state.llm_default_model = settings.larynx_llm_default_model
+
     app.state.worker_ready = True
 
     log.info(
@@ -137,6 +150,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await funasr_client.stop()
         await vad_punc_worker.stop()
         await vad_punc_client.stop()
+        await llm_client.aclose()
         try:
             await redis_client.aclose()
         except Exception:
