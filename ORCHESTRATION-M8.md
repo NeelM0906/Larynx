@@ -286,18 +286,30 @@ Routing logic:
    libs), return 500 with `{"error": {"type": "server_error", "code":
    "codec_unavailable"}}` — OpenAI error shape.
 
-### 2.2 Voice pre-seeding
+### 2.2 Voice pre-seeding — six real, distinct voices
 
-`scripts/load_demo_voices.py` is extended to also insert six **alias
-rows** mapping the OpenAI short-names to the seed voice ids. Aliasing is
-read-only inside the OpenAI shim — we don't expose these as separate
-voices in `/v1/voices`. Implementation: a small `OPENAI_VOICE_ALIASES`
-dict in `routes/openai_compat.py`. (Renaming the seed voices to literally
-be `alloy`/`echo`/etc. breaks the LibriVox provenance — the user's M8
-prompt says "rename seeds to match"; we go with the alias dict because
-the three LibriVox samples can't cover six distinct OpenAI personalities
-anyway. This tradeoff is the only place I'm deviating from the prompt
-and is called out in the design's "Open questions" section.)
+`scripts/load_demo_voices.py` is extended so that after a run the voice
+library always contains six voices whose **names** match the OpenAI
+preset short-names exactly:
+
+- `alloy`   — rename of `librivox-male-baritone` (upload path, seeded from LibriVox)
+- `echo`    — rename of `librivox-male-expressive` (upload path, seeded from LibriVox)
+- `nova`    — rename of `librivox-female-clear` (upload path, seeded from LibriVox)
+- `fable`   — newly **designed** via `POST /v1/voices/design`
+  prompt: "warm mid-range male storyteller, unhurried pace, British English"
+- `onyx`    — newly **designed**
+  prompt: "deep resonant male, measured and authoritative, American English"
+- `shimmer` — newly **designed**
+  prompt: "soft intimate female, breathy but clear, American English"
+
+The seed script is idempotent — it checks `GET /v1/voices` for each name
+and only creates what's missing, so re-runs on an existing library are
+free. Designed voices are persisted with `source='designed'` (already a
+supported VoiceSource value from M2).
+
+With distinct rows under each of the six names, `/v1/audio/speech`
+routing becomes a plain name-lookup against the `voices` table — no
+alias dict, no fallback. Requests for any other voice name return 404.
 
 ### 2.3 SDK verification test
 
@@ -631,8 +643,8 @@ fails in commit 21, subsequent patch commits follow before v1 declare.
 
 ### 5.3 Open questions (decisions made, called out)
 
-1. **OpenAI voice aliases vs renaming seeds.** Went with aliases — see
-   §2.2. If Neel disagrees, it's a single-file change.
+1. **OpenAI voice naming.** Resolved: six real distinct voices (3
+   renamed LibriVox seeds + 3 newly designed), see §2.2. No alias layer.
 2. **Batch worker as HTTP loopback vs direct client.** Went with
    loopback. Avoids doubling GPU footprint. Trade-off: one extra
    serialization hop per batch item (≤1ms).
