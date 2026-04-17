@@ -25,7 +25,13 @@ import pytest_asyncio
 import soundfile as sf
 from httpx import ASGITransport, AsyncClient
 
-pytestmark = pytest.mark.real_model
+# Module-scoped event loop across fixtures + tests. Without this,
+# pytest-asyncio hands each test function its own fresh loop, but the
+# nano-vllm-voxcpm async pool's recv_queue task is bound to the loop that
+# was running when the fixture loaded the model — cross-loop awaits hang
+# silently. Pinning everything to the module loop keeps that task alive
+# and reachable from every test in this file.
+pytestmark = [pytest.mark.real_model, pytest.mark.asyncio(loop_scope="module")]
 
 
 def _skip_if_disabled() -> None:
@@ -59,7 +65,7 @@ def _real_voice_bytes() -> bytes:
     return buf.getvalue()
 
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def real_client(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> AsyncClient:
@@ -102,7 +108,6 @@ def real_auth_headers() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_real_upload_produces_latents_on_disk_and_redis(
     real_client: AsyncClient,
     real_auth_headers: dict[str, str],
@@ -120,7 +125,6 @@ async def test_real_upload_produces_latents_on_disk_and_redis(
     assert (data_dir / "voices" / vid / "latents.meta.json").exists()
 
 
-@pytest.mark.asyncio
 async def test_real_synthesis_with_voice_id_returns_audio(
     real_client: AsyncClient,
     real_auth_headers: dict[str, str],
@@ -149,7 +153,6 @@ async def test_real_synthesis_with_voice_id_returns_audio(
     assert len(r.content) > 40000
 
 
-@pytest.mark.asyncio
 async def test_cache_warms_second_request(
     real_client: AsyncClient,
     real_auth_headers: dict[str, str],
@@ -201,7 +204,6 @@ async def test_cache_warms_second_request(
     assert all(lat > 0 for lat in latencies)
 
 
-@pytest.mark.asyncio
 async def test_real_design_voice_roundtrip(
     real_client: AsyncClient,
     real_auth_headers: dict[str, str],
@@ -239,7 +241,6 @@ async def test_real_design_voice_roundtrip(
     assert len(r.content) > 20000
 
 
-@pytest.mark.asyncio
 async def test_real_delete_voice_removes_latents(
     real_client: AsyncClient,
     real_auth_headers: dict[str, str],

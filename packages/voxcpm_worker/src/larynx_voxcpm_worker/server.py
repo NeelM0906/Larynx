@@ -38,6 +38,7 @@ class WorkerServer:
         self._manager = manager
         self._task: asyncio.Task[None] | None = None
         self._shutdown = asyncio.Event()
+        self._inflight: set[asyncio.Task[None]] = set()
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -59,15 +60,21 @@ class WorkerServer:
         log.info("voxcpm_worker.stopped")
 
     async def _serve(self) -> None:
+        """Dispatch requests concurrently while keeping strong task refs.
+
+        Without the _inflight set, asyncio.create_task()'d tasks can be
+        garbage-collected mid-run because the event loop holds only a weak
+        reference. The set keeps them alive; the done-callback removes
+        them once complete.
+        """
         while not self._shutdown.is_set():
             try:
                 msg = await self._channel.requests.get()
             except asyncio.CancelledError:
                 break
-            # Fan out one task per request so concurrent callers don't block
-            # each other at the worker mouth. AsyncVoxCPM2ServerPool internally
-            # batches and serialises as needed.
-            asyncio.create_task(self._dispatch(msg), name=f"req-{msg.request_id[:8]}")
+            task = asyncio.create_task(self._dispatch(msg), name=f"req-{msg.request_id[:8]}")
+            self._inflight.add(task)
+            task.add_done_callback(self._inflight.discard)
 
     async def _dispatch(self, msg: RequestMessage) -> None:
         response = await self._handle(msg)
