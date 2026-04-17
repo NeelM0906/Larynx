@@ -8,6 +8,8 @@ process the transport swaps without touching callers.
 from __future__ import annotations
 
 from larynx_shared.ipc import (
+    EncodeReferenceRequest,
+    EncodeReferenceResponse,
     InProcessWorkerClient,
     SynthesizeRequest,
     SynthesizeResponse,
@@ -16,7 +18,7 @@ from larynx_shared.ipc import (
 
 
 class VoxCPMClient:
-    def __init__(self, channel: WorkerChannel, timeout_s: float = 60.0) -> None:
+    def __init__(self, channel: WorkerChannel, timeout_s: float = 120.0) -> None:
         self._rpc = InProcessWorkerClient(channel)
         self._timeout_s = timeout_s
 
@@ -30,13 +32,30 @@ class VoxCPMClient:
         self,
         text: str,
         sample_rate: int,
+        *,
+        voice_id: str | None = None,
+        ref_audio_latents: bytes | None = None,
+        prompt_audio_latents: bytes | None = None,
+        prompt_text: str = "",
         cfg_value: float = 2.0,
-        inference_timesteps: int = 10,
+        temperature: float = 1.0,
+        max_generate_length: int = 2000,
     ) -> SynthesizeResponse:
         req = SynthesizeRequest(
             text=text,
             sample_rate=sample_rate,
+            voice_id=voice_id,
+            ref_audio_latents=ref_audio_latents,
+            prompt_audio_latents=prompt_audio_latents,
+            prompt_text=prompt_text,
             cfg_value=cfg_value,
-            inference_timesteps=inference_timesteps,
+            temperature=temperature,
+            max_generate_length=max_generate_length,
         )
         return await self._rpc.request(req, SynthesizeResponse, timeout=self._timeout_s)
+
+    async def encode_reference(
+        self, audio: bytes, wav_format: str = "wav"
+    ) -> EncodeReferenceResponse:
+        req = EncodeReferenceRequest(audio=audio, wav_format=wav_format)
+        return await self._rpc.request(req, EncodeReferenceResponse, timeout=self._timeout_s)

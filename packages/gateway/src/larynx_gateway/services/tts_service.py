@@ -27,7 +27,6 @@ async def synthesize(req: TTSRequest, client: VoxCPMClient) -> TTSResult:
         text=req.text,
         sample_rate=req.sample_rate,
         cfg_value=req.cfg_value,
-        inference_timesteps=req.inference_timesteps,
     )
     gen_ms = int((time.perf_counter() - t0) * 1000)
 

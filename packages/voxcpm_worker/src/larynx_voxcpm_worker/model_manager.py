@@ -41,7 +41,6 @@ class VoxCPMBackend(ABC):
         text: str,
         sample_rate: int,
         cfg_value: float = 2.0,
-        inference_timesteps: int = 10,
     ) -> NDArray[np.float32]: ...
 
     def close(self) -> None:  # noqa: B027 — intentional no-op default
@@ -61,7 +60,6 @@ class MockVoxCPMBackend(VoxCPMBackend):
         text: str,
         sample_rate: int,
         cfg_value: float = 2.0,
-        inference_timesteps: int = 10,
     ) -> NDArray[np.float32]:
         if not text:
             raise ValueError("text must not be empty")
@@ -128,18 +126,11 @@ class VoxCPMBackendReal(VoxCPMBackend):
         text: str,
         sample_rate: int,
         cfg_value: float = 2.0,
-        inference_timesteps: int = 10,
     ) -> NDArray[np.float32]:
-        assert self._engine is not None, "engine not loaded"
-        # Upstream returns a numpy float32 tensor at its native sample rate;
-        # resampling lives in M4 once streaming arrives.
-        audio = self._engine.generate(
-            text=text,
-            cfg_value=cfg_value,
-            inference_timesteps=inference_timesteps,
-            sample_rate=sample_rate,
-        )
-        return np.asarray(audio, dtype=np.float32)
+        # M1 placeholder signature. Task #11 replaces this class entirely with
+        # an async adapter around AsyncVoxCPM2ServerPool that supports
+        # reference encoding and voice-cloning parameters.
+        raise NotImplementedError("VoxCPMBackendReal is rewritten in M2 task #11")
 
     def close(self) -> None:
         engine = self._engine

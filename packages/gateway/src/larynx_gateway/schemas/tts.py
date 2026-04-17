@@ -15,4 +15,3 @@ class TTSRequest(BaseModel):
     sample_rate: int = Field(default=24000, ge=8000, le=48000)
     output_format: OutputFormat = "wav"
     cfg_value: float = Field(default=2.0, ge=0.0, le=10.0)
-    inference_timesteps: int = Field(default=10, ge=1, le=100)

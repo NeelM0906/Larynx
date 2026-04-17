@@ -82,7 +82,6 @@ class WorkerServer:
                 req.text,
                 req.sample_rate,
                 req.cfg_value,
-                req.inference_timesteps,
             )
             pcm = pcm_from_float(samples)
             duration_ms = int(1000 * len(samples) / req.sample_rate)
