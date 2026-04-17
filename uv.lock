@@ -2383,6 +2383,11 @@ gpu = [
     { name = "vllm" },
     { name = "wetext" },
 ]
+soak = [
+    { name = "psutil" },
+    { name = "pyarrow" },
+    { name = "websockets" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -2413,6 +2418,8 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'gpu'" },
     { name = "modelscope", marker = "extra == 'gpu'" },
     { name = "nano-vllm-voxcpm", marker = "extra == 'gpu'", specifier = "==2.0.0" },
+    { name = "psutil", marker = "extra == 'soak'", specifier = ">=5.9" },
+    { name = "pyarrow", marker = "extra == 'soak'", specifier = ">=15.0" },
     { name = "simplejson", marker = "extra == 'gpu'" },
     { name = "sortedcontainers", marker = "extra == 'gpu'" },
     { name = "spaces", marker = "extra == 'gpu'" },
@@ -2422,9 +2429,10 @@ requires-dist = [
     { name = "torchcodec", marker = "extra == 'gpu'" },
     { name = "transformers", marker = "extra == 'gpu'", specifier = ">=4.51.3" },
     { name = "vllm", marker = "extra == 'gpu'", specifier = "==0.13.0" },
+    { name = "websockets", marker = "extra == 'soak'", specifier = ">=12.0" },
     { name = "wetext", marker = "extra == 'gpu'" },
 ]
-provides-extras = ["gpu"]
+provides-extras = ["soak", "gpu"]
 
 [package.metadata.requires-dev]
 dev = [
