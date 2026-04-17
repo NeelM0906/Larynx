@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     # window unless saved. See POST /v1/voices/design/{preview_id}/save.
     larynx_voice_design_ttl_s: int = 900
 
+    # M7 fine-tuning. ORPHAN_JOB_GRACE (per ORCHESTRATION-M7.md §3.4
+    # E-LoRA-2): a non-terminal job older than this at boot belongs to a
+    # previous gateway process and gets marked FAILED(gateway_restarted).
+    larynx_ft_orphan_grace_seconds: int = 60
+
     # Logging
     larynx_log_level: str = "INFO"
     larynx_log_json: bool = True

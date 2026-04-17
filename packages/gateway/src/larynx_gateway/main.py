@@ -27,7 +27,7 @@ from larynx_voxcpm_worker.model_manager import VoxCPMModelManager
 from larynx_voxcpm_worker.server import WorkerServer
 
 from larynx_gateway.config import Settings, get_settings
-from larynx_gateway.db.session import dispose_engine, init_engine
+from larynx_gateway.db.session import dispose_engine, get_session, init_engine
 from larynx_gateway.logging import configure_logging
 from larynx_gateway.routes import (
     conversation,
@@ -38,6 +38,7 @@ from larynx_gateway.routes import (
     tts_stream,
     voices,
 )
+from larynx_gateway.services.boot_reconcile import load_lora_voices, reap_orphan_jobs
 from larynx_gateway.services.latent_cache import LatentCache, build_redis_client
 from larynx_gateway.services.llm_client import LLMClient
 from larynx_gateway.services.voice_files import resolve_data_dir
@@ -124,6 +125,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.vad_punc_manager = vad_punc_manager
     app.state.vad_punc_worker = vad_punc_worker
     app.state.vad_punc_client = vad_punc_client
+
+    # M7 boot reconciliation — must run AFTER voxcpm_worker is ready and
+    # BEFORE we serve HTTP traffic, so a synthesis request using a LoRA
+    # voice never races ahead of its register_lora. See
+    # ORCHESTRATION-M7.md §8.5.
+    async for db_session in get_session():
+        unloaded = await load_lora_voices(db_session, client)
+        await reap_orphan_jobs(db_session, grace_seconds=settings.larynx_ft_orphan_grace_seconds)
+        # Stash the loaded/failed status for the /v1/voices route so it
+        # can surface an ``unloaded`` flag on failed rows. Transient —
+        # not persisted, recomputed on next boot.
+        app.state.lora_load_status = {vid: ok for vid, ok in unloaded.items()}
+        break
 
     # LLM client (OpenRouter). Shared across conversation sessions; one
     # httpx connection pool per gateway process. API key can be empty
