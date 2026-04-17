@@ -23,6 +23,11 @@ uv.lock.bak
 /outputs/
 /latent_cache/
 /lora_weights/
+
+# Read-only upstream reference checkouts — cloned for design reference
+# only; not part of our build or git history. See docs/ORCHESTRATION-M7.md
+# §0 for provenance.
+/third_party/
 *.wav
 *.mp3
 !packages/gateway/tests/fixtures/*.wav
