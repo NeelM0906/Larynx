@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from larynx_gateway.db.session import get_session
 from larynx_gateway.services.latent_cache import LatentCache
 from larynx_gateway.services.voice_library import VoiceLibrary
+from larynx_gateway.workers_client.funasr_client import FunASRClient
 from larynx_gateway.workers_client.voxcpm_client import VoxCPMClient
 
 
@@ -23,6 +24,13 @@ def get_voxcpm_client(request: Request) -> VoxCPMClient:
     client: VoxCPMClient | None = getattr(request.app.state, "voxcpm_client", None)
     if client is None:
         raise RuntimeError("voxcpm_client not initialised (lifespan did not run?)")
+    return client
+
+
+def get_funasr_client(request: Request) -> FunASRClient:
+    client: FunASRClient | None = getattr(request.app.state, "funasr_client", None)
+    if client is None:
+        raise RuntimeError("funasr_client not initialised (lifespan did not run?)")
     return client
 
 

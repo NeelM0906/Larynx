@@ -6,29 +6,35 @@ requires-python = ">=3.11"
 dependencies = [
     "larynx-shared",
     "larynx-voxcpm-worker",
+    "larynx-funasr-worker",
     "larynx-gateway",
 ]
 
 [project.optional-dependencies]
-# Installs the nano-vllm-voxcpm runtime (torch + flash-attn + CUDA). Only
-# available on the GPU box. Invoke via `uv sync --extra gpu`.
+# Installs the nano-vllm-voxcpm + Fun-ASR-vllm runtimes (torch + flash-attn
+# + vllm + CUDA). Only available on the GPU box. Invoke via
+# `uv sync --extra gpu`.
 gpu = [
     "nano-vllm-voxcpm==2.0.0",
     # Pinned to match the M0 smoke env (torch 2.9 + flash-attn 2.8.3).
     # torch 2.10+ builds for CUDA 13 are ABI-incompatible with flash-attn
     # wheels from when 2.9/cu128 was stable — see scripts/m0 notes.
     "torch>=2.9,<2.10",
+    "torchaudio>=2.9,<2.10",
     "flash-attn==2.8.3",
+    "vllm==0.13.0",
+    "funasr>=1.3.0",
+    "transformers>=4.51.3",
 ]
 
 [tool.uv.workspace]
-# Add new workers here as they're built: M3 -> funasr_worker, vad_punc_worker;
-# M7 -> training_worker. The spec says `packages/*` in REPO_STRUCTURE.md; we
-# list members explicitly so a just-created directory with no pyproject.toml
-# doesn't break `uv sync`.
+# Add new workers here as they're built: M7 -> training_worker. The spec
+# says `packages/*` in REPO_STRUCTURE.md; we list members explicitly so a
+# just-created directory with no pyproject.toml doesn't break `uv sync`.
 members = [
     "packages/shared",
     "packages/voxcpm_worker",
+    "packages/funasr_worker",
     "packages/gateway",
 ]
 
@@ -36,6 +42,7 @@ members = [
 larynx-shared = { workspace = true }
 larynx-gateway = { workspace = true }
 larynx-voxcpm-worker = { workspace = true }
+larynx-funasr-worker = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -64,11 +71,16 @@ ignore = ["E501", "B008", "SIM105"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["packages/gateway/tests", "packages/voxcpm_worker/tests", "packages/shared/tests"]
-# Tests that require loading the actual VoxCPM2 model on GPU. Opt-in via
-# `RUN_REAL_MODEL=1 uv run pytest -m real_model`. Default `pytest` run
-# excludes them so the mock suite stays fast.
+testpaths = [
+    "packages/gateway/tests",
+    "packages/voxcpm_worker/tests",
+    "packages/funasr_worker/tests",
+    "packages/shared/tests",
+]
+# Tests that require loading the actual VoxCPM2 / Fun-ASR models on GPU.
+# Opt-in via `RUN_REAL_MODEL=1 uv run pytest -m real_model`. Default
+# `pytest` run excludes them so the mock suite stays fast.
 markers = [
-    "real_model: requires the real VoxCPM2 model on GPU (opt-in via RUN_REAL_MODEL=1)",
+    "real_model: requires the real VoxCPM2 / Fun-ASR model on GPU (opt-in via RUN_REAL_MODEL=1)",
 ]
 addopts = "-m 'not real_model'"

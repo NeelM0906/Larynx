@@ -17,6 +17,8 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI
+from larynx_funasr_worker.model_manager import FunASRModelManager
+from larynx_funasr_worker.server import WorkerServer as FunASRWorkerServer
 from larynx_voxcpm_worker.model_manager import VoxCPMModelManager
 from larynx_voxcpm_worker.server import WorkerServer
 
@@ -27,6 +29,7 @@ from larynx_gateway.routes import health, tts, voices
 from larynx_gateway.services.latent_cache import LatentCache, build_redis_client
 from larynx_gateway.services.voice_files import resolve_data_dir
 from larynx_gateway.workers_client.base import WorkerChannel
+from larynx_gateway.workers_client.funasr_client import FunASRClient
 from larynx_gateway.workers_client.voxcpm_client import VoxCPMClient
 
 log = structlog.get_logger(__name__)
@@ -73,11 +76,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.voxcpm_manager = manager
     app.state.voxcpm_worker = worker
     app.state.voxcpm_client = client
+
+    # Fun-ASR STT worker + client (in-process for M3; splits to its own
+    # supervisord program when we move to separate GPU/CPU containers).
+    os.environ.setdefault("LARYNX_STT_MODE", settings.larynx_stt_mode)
+    os.environ.setdefault("LARYNX_FUNASR_GPU", str(settings.larynx_funasr_gpu))
+    os.environ.setdefault("LARYNX_FUNASR_GPU_MEM_UTIL", str(settings.larynx_funasr_gpu_mem_util))
+
+    funasr_manager = await FunASRModelManager.from_env()
+    funasr_channel = WorkerChannel()
+    funasr_worker = FunASRWorkerServer(funasr_channel, funasr_manager)
+    funasr_client = FunASRClient(funasr_channel)
+    await funasr_client.start()
+    await funasr_worker.start()
+
+    app.state.funasr_manager = funasr_manager
+    app.state.funasr_worker = funasr_worker
+    app.state.funasr_client = funasr_client
+
     app.state.worker_ready = True
 
     log.info(
         "gateway.ready",
         tts_mode=manager.mode.value,
+        stt_mode=funasr_manager.mode.value,
         port=settings.larynx_port,
         db=_redact(settings.database_url),
         redis=_redact(settings.redis_url),
@@ -90,6 +112,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.worker_ready = False
         await worker.stop()
         await client.stop()
+        await funasr_worker.stop()
+        await funasr_client.stop()
         try:
             await redis_client.aclose()
         except Exception:

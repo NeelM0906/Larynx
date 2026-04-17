@@ -31,6 +31,33 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Fun-ASR STT worker — pinned to GPU 1 via CUDA_VISIBLE_DEVICES so it
+  # never competes with VoxCPM2 (GPU 0). Opt-in (`--profile workers`) so
+  # laptops without CUDA can still bring up postgres/redis.
+  funasr_worker:
+    profiles: ["workers"]
+    build:
+      context: .
+      dockerfile: docker/funasr_worker.Dockerfile
+    container_name: larynx-funasr-worker
+    environment:
+      LARYNX_STT_MODE: funasr
+      LARYNX_FUNASR_GPU: "0"  # 0 inside the container = GPU 1 on the host
+      CUDA_VISIBLE_DEVICES: "1"
+      HF_HOME: /app/.cache/huggingface
+    volumes:
+      - .:/app
+      - larynx-hf-cache:/app/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: ["gpu"]
+    restart: unless-stopped
+
 volumes:
   larynx-postgres-data:
   larynx-redis-data:
+  larynx-hf-cache:

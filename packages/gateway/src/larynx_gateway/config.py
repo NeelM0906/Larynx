@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     larynx_voxcpm_inference_timesteps: int = 10
     larynx_default_sample_rate: int = 24000
 
+    # STT worker (Fun-ASR-Nano + Fun-ASR-MLT-Nano)
+    larynx_stt_mode: str = Field(default="mock")  # "mock" | "funasr"
+    larynx_funasr_gpu: int = 1  # GPU 1 by PRD §6
+    larynx_funasr_gpu_mem_util: float = 0.4
+
     # Storage
     database_url: str = "postgresql+psycopg://larynx:larynx@localhost:5433/larynx"
     redis_url: str = "redis://localhost:6380/0"
