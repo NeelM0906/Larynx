@@ -85,6 +85,12 @@ async def create_job(
         expires_at=expires,
     )
     session.add(job)
+    # Flush the parent row so the FK is satisfied when SQLAlchemy
+    # orders inserts during the final commit. Without this, the
+    # unit-of-work can try to INSERT batch_items before batch_jobs
+    # (no declared relationship() drives ordering) and Postgres
+    # rejects the FK.
+    await session.flush()
 
     for idx, item in enumerate(req.items):
         session.add(_build_item_row(job_id, idx, item))
