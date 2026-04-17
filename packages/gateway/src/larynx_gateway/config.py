@@ -25,17 +25,30 @@ class Settings(BaseSettings):
     # TTS worker
     larynx_tts_mode: str = Field(default="mock")  # "mock" | "voxcpm"
     larynx_voxcpm_gpu: int = 0
+    larynx_voxcpm_model: str = "openbmb/VoxCPM2"
+    larynx_voxcpm_inference_timesteps: int = 10
     larynx_default_sample_rate: int = 24000
 
     # Storage
     database_url: str = "postgresql+psycopg://larynx:larynx@localhost:5433/larynx"
     redis_url: str = "redis://localhost:6380/0"
+    # Persistent data root — reference audio and latent caches live here.
+    larynx_data_dir: str = "./data"
+
+    # Latent cache
+    # TTL for the Redis tier. Disk is canonical + permanent; Redis evicts LRU
+    # and expires to keep hot voices in RAM without unbounded growth.
+    larynx_latent_cache_ttl_s: int = 3600
+
+    # Voice design preview TTL — ephemeral previews are cleaned up after this
+    # window unless saved. See POST /v1/voices/design/{preview_id}/save.
+    larynx_voice_design_ttl_s: int = 900
 
     # Logging
     larynx_log_level: str = "INFO"
     larynx_log_json: bool = True
 
-    # Bind
+    # Gateway bind
     larynx_host: str = "0.0.0.0"
     larynx_port: int = 8000
 
