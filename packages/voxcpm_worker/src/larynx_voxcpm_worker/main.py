@@ -1,6 +1,6 @@
 """Standalone entrypoint for the VoxCPM2 worker.
 
-Not used in M1 — the gateway's lifespan starts the worker in-process via
+Not used in M1/M2 — the gateway's lifespan starts the worker in-process via
 ``WorkerServer`` directly. This entrypoint exists so the worker can be split
 into its own supervisord program without code changes when we need to
 (likely when a second GPU's worth of work moves here).
@@ -20,12 +20,11 @@ log = structlog.get_logger(__name__)
 
 
 async def _run() -> None:
-    manager = await asyncio.to_thread(VoxCPMModelManager.from_env)
+    manager = await VoxCPMModelManager.from_env()
     channel = WorkerChannel()
     server = WorkerServer(channel, manager)
     install_signal_handlers(server)
     await server.start()
-    # Block forever until SIGTERM triggers server.stop() via the signal handler.
     await asyncio.Event().wait()
 
 

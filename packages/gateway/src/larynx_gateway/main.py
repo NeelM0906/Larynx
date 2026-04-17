@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     os.environ.setdefault("LARYNX_TTS_MODE", settings.larynx_tts_mode)
     os.environ.setdefault("LARYNX_VOXCPM_GPU", str(settings.larynx_voxcpm_gpu))
 
-    manager = VoxCPMModelManager.from_env()
+    manager = await VoxCPMModelManager.from_env()
     channel = WorkerChannel()
     worker = WorkerServer(channel, manager)
     client = VoxCPMClient(channel)
