@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Conversation — Larynx playground</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2em auto; padding: 0 1em; color: #222; }
+    input[type=text], textarea { width: 100%; padding: 6px; box-sizing: border-box; font: 14px monospace; }
+    textarea { min-height: 60px; }
+    label { display:block; font-size: 13px; color: #555; margin: 12px 0 4px; }
+    button { padding: 8px 16px; font-size: 14px; cursor: pointer; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .state-badge {
+      display: inline-block; padding: 4px 12px; border-radius: 12px;
+      font-size: 13px; font-weight: 600; background: #eee; color: #666;
+      min-width: 90px; text-align: center;
+    }
+    .state-LISTENING { background: #e7f7e7; color: #2d6a2d; }
+    .state-TRANSCRIBING { background: #fff4d6; color: #8a6a00; }
+    .state-THINKING { background: #e7e7f7; color: #3a3a8a; }
+    .state-SPEAKING { background: #e0f0ff; color: #0d4a8a; }
+    .state-IDLE { background: #eee; color: #666; }
+    .transcript {
+      font-family: system-ui; font-size: 17px; padding: 12px;
+      background: #fafafa; border: 1px solid #eee; border-radius: 6px;
+      margin-top: 6px; min-height: 300px; max-height: 500px; overflow-y: auto;
+    }
+    .u-partial { color: #888; font-style: italic; }   /* greyed user partials */
+    .u-final   { color: #111; }                        /* black user finals   */
+    .a-turn    { color: #1a57b8; margin: 0.3em 0 0.8em; } /* blue assistant   */
+    .a-interrupted::after { content: "…"; color: #888; }
+    .log { font: 12px/1.4 monospace; background: #222; color: #ddd; padding: 8px; border-radius: 6px; margin-top: 8px; height: 120px; overflow-y: auto; }
+    .metrics { font: 13px/1.5 monospace; background: #f7f7f7; padding: 8px; border-radius: 6px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Conversation</h1>
+
+  <label>Gateway host (ws)</label>
+  <input id="host" type="text" value="ws://localhost:8000" />
+
+  <label>Bearer token</label>
+  <input id="token" type="text" placeholder="LARYNX_API_TOKEN" />
+
+  <div class="row" style="margin-top: 1em;">
+    <label style="margin:0;">voice_id</label>
+    <input id="voice" type="text" placeholder="(default)" style="width: 180px;" />
+    <label style="margin:0;">LLM model</label>
+    <input id="model" type="text" value="anthropic/claude-haiku-4.5" style="width: 280px;" />
+  </div>
+
+  <label>System prompt</label>
+  <textarea id="sys">You are a concise spoken assistant. Keep replies short and natural — 1-2 sentences.</textarea>
+
+  <div class="row" style="margin-top: 1em;">
+    <button id="start">Start</button>
+    <button id="stop">Stop</button>
+    <span id="state" class="state-badge state-IDLE">IDLE</span>
+    <span class="metrics" id="metrics" style="margin-left: auto;">—</span>
+  </div>
+
+  <label style="margin-top: 1.2em;">Transcript</label>
+  <div class="transcript" id="transcript"></div>
+
+  <div class="log" id="log"></div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Mic → AudioWorklet downsamples to 16kHz PCM16, ships over WS.
+// Incoming binary frames = TTS audio; decoded via AudioBuffer + queue-based
+// scheduler so chunks play back-to-back without gaps or overlaps.
+// Barge-in is automatic — the server decides (VAD does the lifting).
+//
+// UI:
+//   - State badge reflects server-pushed session.status
+//   - Transcript: greyed user partials (updating in place), then black user
+//     finals, then blue assistant turns. On `interrupt` we mark the current
+//     assistant turn truncated ("…") and stop all queued audio.
+// ---------------------------------------------------------------------------
+
+const log = (...a) => {
+  const el = document.getElementById("log");
+  el.textContent += a.join(" ") + "\n";
+  el.scrollTop = el.scrollHeight;
+};
+const $ = (id) => document.getElementById(id);
+
+const transcriptEl = $("transcript");
+const stateEl = $("state");
+const metricsEl = $("metrics");
+
+let ws = null;
+let audioCtx = null;
+let mediaStream = null;
+let workletNode = null;
+
+// TTS playback scheduling. Each incoming binary frame is 16-bit LE PCM at
+// 24kHz mono (server config). We decode to a Float32 and schedule with an
+// AudioBufferSourceNode at `nextStart` — chaining so chunks play seamlessly.
+let ttsSampleRate = 24000;
+let nextStart = 0;
+let activeSources = [];
+
+// UI state for the current turn.
+let currentPartialEl = null;
+let currentAssistantEl = null;
+
+const WORKLET_CODE = `
+class DownsampleToPCM16 extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    this.targetRate = options.processorOptions.targetRate;
+  }
+  process(inputs) {
+    const input = inputs[0];
+    if (!input || !input.length) return true;
+    const ch = input[0];
+    const srcRate = sampleRate;
+    const ratio = srcRate / this.targetRate;
+    const outLen = Math.floor(ch.length / ratio);
+    const out = new Int16Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const v = ch[Math.floor(i * ratio)];
+      out[i] = Math.max(-32768, Math.min(32767, Math.round(v * 32767)));
+    }
+    this.port.postMessage(out.buffer, [out.buffer]);
+    return true;
+  }
+}
+registerProcessor('downsample-pcm16', DownsampleToPCM16);
+`;
+
+function setState(label) {
+  const name = label.toUpperCase();
+  stateEl.textContent = name;
+  stateEl.className = "state-badge state-" + name;
+}
+
+function mapServerState(s) {
+  // server → UI label mapping
+  switch (s) {
+    case "idle": return "LISTENING";
+    case "user_speaking": return "TRANSCRIBING";
+    case "llm_generating": return "THINKING";
+    case "tts_speaking": return "SPEAKING";
+    default: return "IDLE";
+  }
+}
+
+function ensurePartial() {
+  if (!currentPartialEl || !currentPartialEl.isConnected) {
+    currentPartialEl = document.createElement("div");
+    currentPartialEl.className = "u-partial";
+    transcriptEl.appendChild(currentPartialEl);
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  }
+  return currentPartialEl;
+}
+function commitFinal(text) {
+  if (currentPartialEl) {
+    currentPartialEl.className = "u-final";
+    currentPartialEl.textContent = text;
+    currentPartialEl = null;
+  } else {
+    const d = document.createElement("div");
+    d.className = "u-final"; d.textContent = text;
+    transcriptEl.appendChild(d);
+  }
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+function ensureAssistant() {
+  if (!currentAssistantEl || !currentAssistantEl.isConnected) {
+    currentAssistantEl = document.createElement("div");
+    currentAssistantEl.className = "a-turn";
+    currentAssistantEl.textContent = "";
+    transcriptEl.appendChild(currentAssistantEl);
+  }
+  return currentAssistantEl;
+}
+function closeAssistant() {
+  currentAssistantEl = null;
+}
+function markAssistantInterrupted() {
+  if (currentAssistantEl) {
+    currentAssistantEl.classList.add("a-interrupted");
+    currentAssistantEl = null;
+  }
+}
+
+// --- TTS playback -----------------------------------------------------
+
+function playPcm16(buf) {
+  if (!audioCtx) return;
+  const i16 = new Int16Array(buf);
+  const f32 = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768.0;
+  const audioBuf = audioCtx.createBuffer(1, f32.length, ttsSampleRate);
+  audioBuf.copyToChannel(f32, 0);
+  const src = audioCtx.createBufferSource();
+  src.buffer = audioBuf;
+  src.connect(audioCtx.destination);
+  const now = audioCtx.currentTime;
+  const startAt = Math.max(now + 0.005, nextStart);
+  src.start(startAt);
+  nextStart = startAt + audioBuf.duration;
+  activeSources.push(src);
+  src.onended = () => {
+    const idx = activeSources.indexOf(src);
+    if (idx >= 0) activeSources.splice(idx, 1);
+  };
+}
+
+function stopPlayback() {
+  // Barge-in local action: kill all scheduled sources so no stale audio
+  // plays after the interrupt event. Server has already stopped sending.
+  for (const s of activeSources) { try { s.stop(0); } catch (_) {} }
+  activeSources = [];
+  nextStart = 0;
+}
+
+// --- WS lifecycle -----------------------------------------------------
+
+async function start() {
+  stopAll();
+  $("log").textContent = "";
+  transcriptEl.innerHTML = "";
+
+  const host = $("host").value.trim();
+  const token = $("token").value.trim();
+  const voice_id = $("voice").value.trim() || null;
+  const llm_model = $("model").value.trim();
+  const system_prompt = $("sys").value;
+  if (!host || !token) { log("host/token required"); return; }
+
+  mediaStream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, noiseSuppression: true, echoCancellation: true },
+  });
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  nextStart = 0;
+
+  const blob = new Blob([WORKLET_CODE], { type: "application/javascript" });
+  const url = URL.createObjectURL(blob);
+  await audioCtx.audioWorklet.addModule(url);
+  workletNode = new AudioWorkletNode(audioCtx, "downsample-pcm16", {
+    processorOptions: { targetRate: 16000 },
+  });
+  const src = audioCtx.createMediaStreamSource(mediaStream);
+  src.connect(workletNode);
+
+  const wsUrl = `${host}/v1/conversation?token=${encodeURIComponent(token)}`;
+  log("connecting", wsUrl);
+  ws = new WebSocket(wsUrl);
+  ws.binaryType = "arraybuffer";
+
+  let turns = 0;
+  let lastTurnMs = null;
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      type: "config",
+      voice_id,
+      llm_model,
+      system_prompt,
+      input_sample_rate: 16000,
+      output_sample_rate: ttsSampleRate,
+      speech_end_silence_ms: 300,
+      partial_interval_ms: 720,
+    }));
+    workletNode.port.onmessage = (ev) => {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(ev.data);
+    };
+    setState("LISTENING");
+  };
+
+  ws.onmessage = (ev) => {
+    if (typeof ev.data !== "string") {
+      // binary = TTS audio
+      playPcm16(ev.data);
+      return;
+    }
+    const msg = JSON.parse(ev.data);
+    switch (msg.type) {
+      case "session.status":
+        setState(mapServerState(msg.state));
+        break;
+      case "input.speech_start":
+        ensurePartial().textContent = "…";
+        break;
+      case "transcript.partial":
+        ensurePartial().textContent = msg.text || "…";
+        break;
+      case "transcript.final":
+        commitFinal(msg.text || "");
+        break;
+      case "response.text_delta":
+        ensureAssistant().textContent += msg.delta || "";
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        break;
+      case "response.done":
+        closeAssistant();
+        turns += 1;
+        lastTurnMs = msg.turn_latency_ms;
+        metricsEl.textContent =
+          `turns: ${turns}   last turn: ${lastTurnMs ?? '—'}ms   stages: ${JSON.stringify(msg.stage_timings_ms || {})}`;
+        break;
+      case "interrupt":
+        markAssistantInterrupted();
+        stopPlayback();
+        log(`interrupt (${msg.barge_in_ms}ms)`);
+        break;
+      case "error":
+        log("error", JSON.stringify(msg));
+        break;
+      default:
+        // ignore unknown event types for forward-compat
+    }
+  };
+
+  ws.onclose = (ev) => { setState("IDLE"); log(`closed code=${ev.code} reason=${ev.reason}`); };
+  ws.onerror = (ev) => log("ws error", String(ev));
+}
+
+function stopAll() {
+  if (ws) {
+    try { ws.send(JSON.stringify({ type: "session.end" })); ws.close(); } catch (_) {}
+    ws = null;
+  }
+  if (workletNode) { try { workletNode.disconnect(); } catch (_) {} workletNode = null; }
+  if (mediaStream) { try { mediaStream.getTracks().forEach(t => t.stop()); } catch (_) {} mediaStream = null; }
+  if (audioCtx) { try { audioCtx.close(); } catch (_) {} audioCtx = null; }
+  stopPlayback();
+  setState("IDLE");
+}
+
+$("start").onclick = start;
+$("stop").onclick = stopAll;
+</script>
+</body>
+</html>
