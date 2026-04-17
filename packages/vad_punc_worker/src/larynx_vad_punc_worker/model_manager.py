@@ -229,9 +229,7 @@ class VadPuncModelManager:
         try:
             mode = VadPuncMode(raw)
         except ValueError as e:
-            raise RuntimeError(
-                f"LARYNX_VAD_PUNC_MODE must be 'mock' or 'real', got {raw!r}"
-            ) from e
+            raise RuntimeError(f"LARYNX_VAD_PUNC_MODE must be 'mock' or 'real', got {raw!r}") from e
 
         if mode is VadPuncMode.MOCK:
             log.info("vad_punc.mode", mode="mock")

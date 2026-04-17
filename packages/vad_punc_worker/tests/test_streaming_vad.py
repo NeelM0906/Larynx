@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from larynx_shared.ipc import WorkerChannel
-
 from larynx_gateway.workers_client.vad_punc_client import VadPuncClient
+from larynx_shared.ipc import WorkerChannel
 from larynx_vad_punc_worker.model_manager import MockVadPuncBackend, VadPuncModelManager
 from larynx_vad_punc_worker.server import WorkerServer
 from larynx_vad_punc_worker.streaming_vad import MockStreamingVad
@@ -68,16 +67,12 @@ async def test_vad_stream_roundtrip_via_client() -> None:
         assert resp.session_id == "xyz"
 
         # Feed 500ms of speech, expect speech_start.
-        feed_resp = await client.vad_stream_feed(
-            session_id="xyz", pcm_s16le=_pcm_tone(500)
-        )
+        feed_resp = await client.vad_stream_feed(session_id="xyz", pcm_s16le=_pcm_tone(500))
         assert feed_resp.vad_state == "speaking"
         assert any(e.event == "speech_start" for e in feed_resp.events)
 
         # Feed 500ms of silence, expect speech_end.
-        feed_resp = await client.vad_stream_feed(
-            session_id="xyz", pcm_s16le=_pcm_silence(500)
-        )
+        feed_resp = await client.vad_stream_feed(session_id="xyz", pcm_s16le=_pcm_silence(500))
         assert feed_resp.vad_state == "silent"
         assert any(e.event == "speech_end" for e in feed_resp.events)
 

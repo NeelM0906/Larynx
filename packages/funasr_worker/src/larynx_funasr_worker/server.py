@@ -122,14 +122,10 @@ class WorkerServer:
                 request_id=req.request_id, code="unsupported_language", message=str(e)
             )
         except ValueError as e:
-            return ErrorMessage(
-                request_id=req.request_id, code="invalid_input", message=str(e)
-            )
+            return ErrorMessage(request_id=req.request_id, code="invalid_input", message=str(e))
         except Exception as e:  # noqa: BLE001 — surface any backend failure
             log.exception("funasr.transcribe_failed", request_id=req.request_id)
-            return ErrorMessage(
-                request_id=req.request_id, code="transcribe_failed", message=str(e)
-            )
+            return ErrorMessage(request_id=req.request_id, code="transcribe_failed", message=str(e))
 
     async def _transcribe_rolling(
         self, req: TranscribeRollingRequest
@@ -174,14 +170,10 @@ class WorkerServer:
                 request_id=req.request_id, code="unsupported_language", message=str(e)
             )
         except ValueError as e:
-            return ErrorMessage(
-                request_id=req.request_id, code="invalid_input", message=str(e)
-            )
+            return ErrorMessage(request_id=req.request_id, code="invalid_input", message=str(e))
         except Exception as e:  # noqa: BLE001
             log.exception("funasr.transcribe_rolling_failed", request_id=req.request_id)
-            return ErrorMessage(
-                request_id=req.request_id, code="transcribe_failed", message=str(e)
-            )
+            return ErrorMessage(request_id=req.request_id, code="transcribe_failed", message=str(e))
 
 
 def install_signal_handlers(server: WorkerServer) -> None:
