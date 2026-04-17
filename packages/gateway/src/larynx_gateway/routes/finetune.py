@@ -19,10 +19,12 @@ from dataclasses import dataclass, field
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
+from fastapi.responses import StreamingResponse
 from larynx_shared.paths import SUPPORTED_AUDIO_SUFFIXES, DatasetPaths
 from larynx_training_worker.dataset_prep import (
     validate_dataset_phase_a,
 )
+from larynx_training_worker.subprocess_runner import parse_training_event
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -370,6 +372,97 @@ async def get_job(
     )
 
 
+@router.get(
+    "/jobs/{job_id}/logs",
+    dependencies=[Depends(require_bearer_token)],
+)
+async def stream_job_logs(
+    job_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+) -> StreamingResponse:
+    """SSE stream of ``train_log`` + ``train_state`` events + one terminal.
+
+    Clients may supply a ``Last-Event-ID`` header to resume; the server
+    replays everything strictly after that stream id from the Redis
+    stream backing the job's logs. The connection closes after the
+    terminal event so clients that want fresh runs open a new request.
+    """
+    job = (
+        await session.execute(select(FineTuneJob).where(FineTuneJob.id == job_id))
+    ).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "job_not_found", "detail": job_id},
+        )
+
+    store: TrainingLogStore = request.app.state.training_log_store
+    registry = _jobs_registry(request)
+    last_event_id = request.headers.get("last-event-id")
+
+    async def _stream():
+        cursor: str | None = last_event_id
+        # Replay loop — keep pulling from Redis until the DB says the
+        # job is terminal AND we've drained every remaining log line.
+        # ``empty_ticks`` bounds the wait so an abandoned stream doesn't
+        # hold a connection forever.
+        empty_ticks = 0
+        while True:
+            batch = await store.tail(job_id, after_id=cursor, count=200)
+            if batch:
+                empty_ticks = 0
+                for entry in batch:
+                    cursor = entry.event_id
+                    yield _sse_frame("log", entry.event_id, entry.line)
+                    ev = parse_training_event(entry.line)
+                    if ev is not None:
+                        yield _sse_frame("state", entry.event_id, json.dumps(ev))
+            # Refresh the job row so we can detect terminal transitions
+            # while the stream is open. SQLAlchemy's session caches rows
+            # it's already seen inside a transaction, so without an
+            # explicit expire + commit we'd keep reading the same
+            # snapshot forever.
+            session.expire_all()
+            await session.commit()
+            current = (
+                await session.execute(select(FineTuneJob).where(FineTuneJob.id == job_id))
+            ).scalar_one_or_none()
+            if current is None:
+                break
+            if current.state in ("SUCCEEDED", "FAILED", "CANCELLED") and not batch:
+                terminal_payload = {
+                    "state": current.state,
+                    "voice_id": current.voice_id,
+                    "error_code": current.error_code,
+                    "error_detail": current.error_detail,
+                }
+                yield _sse_frame("terminal", "terminal", json.dumps(terminal_payload))
+                break
+            # Job still running — poll-sleep briefly. The Redis tail
+            # call returns immediately if there's nothing new, so this
+            # sleep is what caps CPU on an idle stream.
+            if not batch:
+                empty_ticks += 1
+                if empty_ticks > 600:  # ~30s of zero activity on an in-flight job
+                    yield _sse_frame("error", "stream_stall", "no activity for 30s")
+                    break
+                await asyncio.sleep(0.05)
+            # Leave the registry reference unused — it's available for
+            # future cancellation visibility but not needed for the
+            # replay loop itself.
+            _ = registry
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.delete(
     "/jobs/{job_id}",
     status_code=status.HTTP_202_ACCEPTED,
@@ -407,6 +500,18 @@ async def cancel_job(
 # ---------------------------------------------------------------------------
 # Helpers for the status endpoint
 # ---------------------------------------------------------------------------
+
+
+def _sse_frame(event: str, event_id: str, data: str) -> str:
+    """Serialise one SSE record. ``data`` is split on newlines per the
+    SSE spec so multi-line payloads encode correctly.
+    """
+    out = [f"id: {event_id}", f"event: {event}"]
+    for line in data.split("\n"):
+        out.append(f"data: {line}")
+    out.append("")
+    out.append("")  # blank line terminates the record
+    return "\n".join(out)
 
 
 def _clamp01(x: float) -> float:
