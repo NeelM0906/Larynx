@@ -11,6 +11,7 @@ Shutdown is symmetric.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import pathlib
 from collections.abc import AsyncIterator
@@ -42,6 +43,7 @@ from larynx_gateway.routes import (
 from larynx_gateway.services.boot_reconcile import load_lora_voices, reap_orphan_jobs
 from larynx_gateway.services.latent_cache import LatentCache, build_redis_client
 from larynx_gateway.services.llm_client import LLMClient
+from larynx_gateway.services.training_logs import TrainingLogStore
 from larynx_gateway.services.voice_files import resolve_data_dir
 from larynx_gateway.workers_client.base import WorkerChannel
 from larynx_gateway.workers_client.funasr_client import FunASRClient
@@ -72,6 +74,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.redis_client = redis_client
     app.state.latent_cache = latent_cache
     app.state.design_ttl_s = settings.larynx_voice_design_ttl_s
+
+    # M7 fine-tune scaffolding — shared across every training job.
+    # Tests may pre-populate ``training_subprocess_hook`` on app.state
+    # before the lifespan runs; production uses the default
+    # run_training_subprocess.
+    app.state.training_log_store = TrainingLogStore(redis_client)
+    app.state.gpu_train_lock = asyncio.Lock()
+    app.state.ft_jobs = {}
 
     # VoxCPM worker + client (in-process).
     os.environ.setdefault("LARYNX_TTS_MODE", settings.larynx_tts_mode)

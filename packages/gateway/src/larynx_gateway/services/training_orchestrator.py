@@ -166,30 +166,24 @@ async def run_job(
         # ------------------------------------------------------------
         await _transition(session, job, state="TRAINING")
 
+        # Track the most recent step seen during TRAINING. We don't
+        # write each step to the DB — the session isn't safe for
+        # concurrent use, and the route layer reads in-flight progress
+        # off the JobHandle's step_samples ring. The final
+        # ``current_step`` value is committed once TRAINING returns.
         current_step_holder: list[int] = [0]
-        last_commit_step: list[int] = [0]
-        commit_every = 10  # update ``current_step`` every ~10 logical steps
 
-        async def _commit_progress(step: int) -> None:
-            job.current_step = step
-            await session.commit()
-
-        # Synchronous callbacks that the subprocess runner invokes one
-        # per stdout line / one per tracker event. We can't await inside
-        # on_log / on_state, so DB writes are pushed onto the loop via
-        # ``asyncio.get_event_loop().create_task(...)``; the coroutine
-        # handles are fire-and-forget (errors are caught + logged).
+        # Synchronous callbacks — the subprocess runner invokes them
+        # one per stdout line / one per tracker event. We can't await
+        # inside them; log appends to Redis are fire-and-forget via
+        # ``loop.create_task``; errors are caught + logged.
         loop = asyncio.get_running_loop()
 
         def on_log(line: str) -> None:
             loop.create_task(_safe_log(log_store, job_id, line))
 
         def on_state(event: dict[str, Any]) -> None:
-            step = int(event.get("step", 0))
-            current_step_holder[0] = step
-            if step - last_commit_step[0] >= commit_every:
-                last_commit_step[0] = step
-                loop.create_task(_commit_progress(step))
+            current_step_holder[0] = int(event.get("step", 0))
 
         outcome = await subprocess_hook(
             script_path=upstream_script_path,
