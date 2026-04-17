@@ -77,9 +77,7 @@ def _wer(hyp: str, ref: str) -> float:
 
 @pytest.mark.real_model
 @pytest.mark.asyncio
-async def test_english_wer_under_10pct(
-    client: AsyncClient, auth_headers: dict[str, str]
-) -> None:
+async def test_english_wer_under_10pct(client: AsyncClient, auth_headers: dict[str, str]) -> None:
     _needs_real_model()
     audio = _load_fixture("english_reference.wav")
     reference_path = FIXTURE_DIR / "english_reference.txt"
@@ -122,16 +120,12 @@ async def test_chinese_transcript_reasonable(
     assert body["language"] == "zh"
     assert len(body["text"]) > 0
     if anchor:
-        assert anchor in body["text"], (
-            f"expected anchor {anchor!r} in transcript {body['text']!r}"
-        )
+        assert anchor in body["text"], f"expected anchor {anchor!r} in transcript {body['text']!r}"
 
 
 @pytest.mark.real_model
 @pytest.mark.asyncio
-async def test_portuguese_uses_mlt(
-    client: AsyncClient, auth_headers: dict[str, str]
-) -> None:
+async def test_portuguese_uses_mlt(client: AsyncClient, auth_headers: dict[str, str]) -> None:
     _needs_real_model()
     audio = _load_fixture("portuguese_reference.wav")
     r = await client.post(
@@ -195,9 +189,7 @@ async def test_hotword_recovery(client: AsyncClient, auth_headers: dict[str, str
 
 @pytest.mark.real_model
 @pytest.mark.asyncio
-async def test_punctuation_on_vs_off(
-    client: AsyncClient, auth_headers: dict[str, str]
-) -> None:
+async def test_punctuation_on_vs_off(client: AsyncClient, auth_headers: dict[str, str]) -> None:
     _needs_real_model()
     audio = _load_fixture("english_reference.wav")
 

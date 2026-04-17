@@ -9,7 +9,6 @@ from typing import Literal
 from sqlalchemy import DateTime, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-
 # Application-level enum. Kept as ``typing.Literal`` (not SQL ENUM) so the
 # migration story stays simple — the DB column is plain VARCHAR(32) and a
 # new variant (e.g. M7's ``'lora'``) lands without an ALTER TYPE.

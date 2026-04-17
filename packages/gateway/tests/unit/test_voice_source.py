@@ -12,11 +12,9 @@ prerequisite so the later ``'lora'`` addition is one-line.
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from larynx_gateway.db.models import VoiceSource
 from larynx_gateway.schemas.voice import VoiceResponse
-
+from pydantic import ValidationError
 
 VALID_SOURCES: list[VoiceSource] = ["uploaded", "designed", "seed", "lora"]
 

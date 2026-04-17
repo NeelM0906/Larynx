@@ -108,7 +108,9 @@ class LLMClient:
         self._transport = transport
 
     @asynccontextmanager
-    async def _client(self, connect_timeout: float, read_timeout: float) -> AsyncIterator[httpx.AsyncClient]:
+    async def _client(
+        self, connect_timeout: float, read_timeout: float
+    ) -> AsyncIterator[httpx.AsyncClient]:
         # New client per call so timeouts don't leak across sessions with
         # different knob settings. Connection pooling inside a single
         # stream_chat call is what matters; across calls we can afford the
@@ -150,10 +152,7 @@ class LLMClient:
         body: dict[str, object] = {
             "model": model,
             "stream": True,
-            "messages": [
-                m.to_dict() if isinstance(m, ChatMessage) else dict(m)
-                for m in messages
-            ],
+            "messages": [m.to_dict() if isinstance(m, ChatMessage) else dict(m) for m in messages],
             "temperature": temperature,
         }
         if max_tokens is not None:
@@ -162,7 +161,9 @@ class LLMClient:
             body.update(extra_body)
 
         url = f"{self._base_url}/chat/completions"
-        async with self._client(connect_timeout=connect_timeout, read_timeout=read_timeout) as client:
+        async with self._client(
+            connect_timeout=connect_timeout, read_timeout=read_timeout
+        ) as client:
             try:
                 async with client.stream("POST", url, json=body) as resp:
                     if resp.status_code // 100 != 2:

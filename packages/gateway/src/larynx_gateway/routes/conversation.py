@@ -125,9 +125,7 @@ async def ws_conversation(ws: WebSocket) -> None:
         await _send_error(ws, "invalid_config", str(e))
         return
 
-    default_model: str = getattr(
-        ws.app.state, "llm_default_model", "anthropic/claude-haiku-4.5"
-    )
+    default_model: str = getattr(ws.app.state, "llm_default_model", "anthropic/claude-haiku-4.5")
     cfg = ConversationConfig(
         voice_id=cfg_frame.voice_id,
         llm_model=cfg_frame.llm_model or default_model,

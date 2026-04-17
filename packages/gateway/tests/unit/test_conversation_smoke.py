@@ -21,8 +21,6 @@ from typing import Any
 import numpy as np
 import pytest
 import uvicorn
-from larynx_shared.ipc import WorkerChannel
-
 from larynx_gateway.services.conversation_service import (
     ConversationConfig,
     ConversationSession,
@@ -32,7 +30,7 @@ from larynx_gateway.services.llm_client import LLMClient
 from larynx_gateway.workers_client.funasr_client import FunASRClient
 from larynx_gateway.workers_client.vad_punc_client import VadPuncClient
 from larynx_gateway.workers_client.voxcpm_client import VoxCPMClient
-
+from larynx_shared.ipc import WorkerChannel
 
 # --- PCM helpers --------------------------------------------------------
 
@@ -77,13 +75,9 @@ def _make_llm_app(response: str):
         tokens = response.split(" ")
         for i, tok in enumerate(tokens):
             piece = tok if i == 0 else " " + tok
-            await send(
-                {"type": "http.response.body", "body": _sse_event(piece), "more_body": True}
-            )
+            await send({"type": "http.response.body", "body": _sse_event(piece), "more_body": True})
             await asyncio.sleep(0.005)
-        await send(
-            {"type": "http.response.body", "body": b"data: [DONE]\n\n", "more_body": True}
-        )
+        await send({"type": "http.response.body", "body": b"data: [DONE]\n\n", "more_body": True})
         await send({"type": "http.response.body", "body": b"", "more_body": False})
 
     return app
@@ -194,61 +188,61 @@ async def _workers():
 @pytest.mark.asyncio
 async def test_conversation_one_turn_happy_path() -> None:
     """Drive a tone → silence utterance → verify full event sequence."""
-    async with _workers() as (funasr, vad, voxcpm):
-        async with _live_llm_server(
-            _make_llm_app("Hello there, this is a reply.")
-        ) as base_url:
-            llm = LLMClient(api_key="test", base_url=f"{base_url}/api/v1")
-            sink = RecordingSink()
-            cfg = ConversationConfig(
-                llm_model="test-model",
-                output_sample_rate=24000,
-                speech_end_silence_ms=200,
-                partial_interval_ms=200,
-            )
-            session = ConversationSession(
-                cfg=cfg,
-                sink=sink,
-                funasr=funasr,
-                vad=vad,
-                voxcpm=voxcpm,
-                llm=llm,
-            )
-            run_task = asyncio.create_task(session.run())
-            # Feed 1s tone → 500ms silence to trigger one full turn.
-            for _ in range(10):
-                await session.feed_audio(_tone(100))
-                await asyncio.sleep(0.03)
-            for _ in range(6):
-                await session.feed_audio(_silence(100))
-                await asyncio.sleep(0.03)
-            # Wait for response.done to arrive.
-            for _ in range(400):
-                if sink.events_of("response.done"):
-                    break
-                await asyncio.sleep(0.01)
-            assert sink.events_of("response.done"), (
-                f"no response.done — events={[e['type'] for e in sink.events]}"
-            )
-            await session.stop()
-            await asyncio.wait_for(run_task, timeout=3.0)
+    async with (
+        _workers() as (funasr, vad, voxcpm),
+        _live_llm_server(_make_llm_app("Hello there, this is a reply.")) as base_url,
+    ):
+        llm = LLMClient(api_key="test", base_url=f"{base_url}/api/v1")
+        sink = RecordingSink()
+        cfg = ConversationConfig(
+            llm_model="test-model",
+            output_sample_rate=24000,
+            speech_end_silence_ms=200,
+            partial_interval_ms=200,
+        )
+        session = ConversationSession(
+            cfg=cfg,
+            sink=sink,
+            funasr=funasr,
+            vad=vad,
+            voxcpm=voxcpm,
+            llm=llm,
+        )
+        run_task = asyncio.create_task(session.run())
+        # Feed 1s tone → 500ms silence to trigger one full turn.
+        for _ in range(10):
+            await session.feed_audio(_tone(100))
+            await asyncio.sleep(0.03)
+        for _ in range(6):
+            await session.feed_audio(_silence(100))
+            await asyncio.sleep(0.03)
+        # Wait for response.done to arrive.
+        for _ in range(400):
+            if sink.events_of("response.done"):
+                break
+            await asyncio.sleep(0.01)
+        assert sink.events_of("response.done"), (
+            f"no response.done — events={[e['type'] for e in sink.events]}"
+        )
+        await session.stop()
+        await asyncio.wait_for(run_task, timeout=3.0)
 
-            # Verify expected stage events landed in order.
-            kinds = [e["type"] for e in sink.events]
-            for expected in (
-                "input.speech_start",
-                "input.speech_end",
-                "transcript.final",
-                "response.text_delta",
-                "response.done",
-            ):
-                assert expected in kinds, f"missing {expected}; kinds={kinds}"
-            # TTS audio frames streamed.
-            assert sink.audio, f"no TTS audio frames emitted"
-            # Final state is IDLE.
-            assert session.state is SessionState.IDLE
-            # Assistant message committed to history.
-            assert any(m.role == "assistant" for m in session._history)  # noqa: SLF001
+        # Verify expected stage events landed in order.
+        kinds = [e["type"] for e in sink.events]
+        for expected in (
+            "input.speech_start",
+            "input.speech_end",
+            "transcript.final",
+            "response.text_delta",
+            "response.done",
+        ):
+            assert expected in kinds, f"missing {expected}; kinds={kinds}"
+        # TTS audio frames streamed.
+        assert sink.audio, "no TTS audio frames emitted"
+        # Final state is IDLE.
+        assert session.state is SessionState.IDLE
+        # Assistant message committed to history.
+        assert any(m.role == "assistant" for m in session._history)  # noqa: SLF001
 
 
 @pytest.mark.asyncio

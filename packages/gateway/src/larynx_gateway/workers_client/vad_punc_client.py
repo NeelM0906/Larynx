@@ -62,9 +62,7 @@ class VadPuncClient:
         pcm_s16le: bytes,
         is_final: bool = False,
     ) -> VadStreamFeedResponse:
-        req = VadStreamFeedRequest(
-            session_id=session_id, pcm_s16le=pcm_s16le, is_final=is_final
-        )
+        req = VadStreamFeedRequest(session_id=session_id, pcm_s16le=pcm_s16le, is_final=is_final)
         return await self._rpc.request(req, VadStreamFeedResponse, timeout=self._timeout_s)
 
     async def vad_stream_close(self, *, session_id: str) -> VadStreamCloseResponse:

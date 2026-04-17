@@ -29,26 +29,22 @@ from typing import Any
 import numpy as np
 import pytest
 import uvicorn
-from larynx_shared.ipc import (
-    SynthesizeChunkFrame,
-    SynthesizeDoneFrame,
-    WorkerChannel,
-)
-
 from larynx_gateway.services.conversation_service import (
     ConversationConfig,
     ConversationSession,
-    LLMEvent,
     SessionState,
     STTEvent,
-    TTSEvent,
     VADEvent,
 )
 from larynx_gateway.services.llm_client import LLMClient
 from larynx_gateway.workers_client.funasr_client import FunASRClient
 from larynx_gateway.workers_client.vad_punc_client import VadPuncClient
 from larynx_gateway.workers_client.voxcpm_client import VoxCPMClient
-
+from larynx_shared.ipc import (
+    SynthesizeChunkFrame,
+    SynthesizeDoneFrame,
+    WorkerChannel,
+)
 
 # ---------------------------------------------------------------------------
 # Live LLM server helpers (same shape as test_llm_client.py)
@@ -102,14 +98,10 @@ def _make_token_stream_app(tokens: list[str], *, per_token_delay_s: float = 0.00
             }
         )
         for tok in tokens:
-            await send(
-                {"type": "http.response.body", "body": _sse_event(tok), "more_body": True}
-            )
+            await send({"type": "http.response.body", "body": _sse_event(tok), "more_body": True})
             if per_token_delay_s > 0:
                 await asyncio.sleep(per_token_delay_s)
-        await send(
-            {"type": "http.response.body", "body": b"data: [DONE]\n\n", "more_body": True}
-        )
+        await send({"type": "http.response.body", "body": b"data: [DONE]\n\n", "more_body": True})
         await send({"type": "http.response.body", "body": b"", "more_body": False})
 
     return app
@@ -129,9 +121,7 @@ def _make_killed_mid_stream_app(tokens_before_kill: list[str]):
             }
         )
         for tok in tokens_before_kill:
-            await send(
-                {"type": "http.response.body", "body": _sse_event(tok), "more_body": True}
-            )
+            await send({"type": "http.response.body", "body": _sse_event(tok), "more_body": True})
             await asyncio.sleep(0.005)
         # End the response without [DONE] or normal close.
         await send({"type": "http.response.body", "body": b"", "more_body": False})
@@ -169,7 +159,7 @@ class _SlowTTSClient:
         self.cancel_count: int = 0
         self.finish_count: int = 0
 
-    def synthesize_text_stream(self, **kwargs) -> "_SlowTTSCtx":  # noqa: ARG002
+    def synthesize_text_stream(self, **kwargs) -> _SlowTTSCtx:  # noqa: ARG002
         return _SlowTTSCtx(self)
 
 
@@ -202,7 +192,9 @@ class _SlowTTSCtx:
                 request_id=req_id,
                 sample_rate=self._parent._sample_rate,
                 total_duration_ms=int(
-                    self._parent._total_chunks * self._parent._chunk_samples * 1000
+                    self._parent._total_chunks
+                    * self._parent._chunk_samples
+                    * 1000
                     / self._parent._sample_rate
                 ),
                 chunk_count=self._parent._total_chunks,
@@ -309,7 +301,9 @@ async def _scripted_turn(session: ConversationSession, *, ordinal: int, text: st
         VADEvent(kind="speech_start", utterance_ordinal=ordinal, session_ms=(ordinal - 1) * 1000)
     )
     await session._queue.put(  # noqa: SLF001
-        VADEvent(kind="speech_end", utterance_ordinal=ordinal, session_ms=(ordinal - 1) * 1000 + 800)
+        VADEvent(
+            kind="speech_end", utterance_ordinal=ordinal, session_ms=(ordinal - 1) * 1000 + 800
+        )
     )
     await session._queue.put(  # noqa: SLF001
         STTEvent(
@@ -321,7 +315,9 @@ async def _scripted_turn(session: ConversationSession, *, ordinal: int, text: st
     )
 
 
-async def _wait_for_state(session: ConversationSession, target: SessionState, *, timeout_s: float = 3.0) -> None:
+async def _wait_for_state(
+    session: ConversationSession, target: SessionState, *, timeout_s: float = 3.0
+) -> None:
     t_end = time.monotonic() + timeout_s
     while time.monotonic() < t_end:
         if session.state is target:
@@ -355,16 +351,23 @@ async def _wait_for_event(
 async def test_barge_in_during_tts_cancels_within_100ms() -> None:
     """Fire speech_start mid-TTS; verify last audio frame ≤ 100ms later."""
     async with _workers() as (funasr, vad, _voxcpm):
-        async with _live_llm(_make_token_stream_app(
-            # Long enough reply so sentence-chunked TTS has work to do.
-            ["Hello", " there", ",", " this", " is", " a", " reply", "."],
-        )) as base_url:
+        async with _live_llm(
+            _make_token_stream_app(
+                # Long enough reply so sentence-chunked TTS has work to do.
+                ["Hello", " there", ",", " this", " is", " a", " reply", "."],
+            )
+        ) as base_url:
             llm = LLMClient(api_key="x", base_url=f"{base_url}/api/v1")
             slow_tts = _SlowTTSClient(per_chunk_delay_s=0.03, total_chunks=100)
             sink = _RecordingSink()
             cfg = ConversationConfig(llm_model="m", speech_end_silence_ms=200)
             session = ConversationSession(
-                cfg=cfg, sink=sink, funasr=funasr, vad=vad, voxcpm=slow_tts, llm=llm  # type: ignore[arg-type]
+                cfg=cfg,
+                sink=sink,
+                funasr=funasr,
+                vad=vad,
+                voxcpm=slow_tts,
+                llm=llm,  # type: ignore[arg-type]
             )
             run_task = asyncio.create_task(session.run())
 
@@ -383,11 +386,15 @@ async def test_barge_in_during_tts_cancels_within_100ms() -> None:
             )
             # Wait for interrupt event.
             interrupt = await _wait_for_event(sink, "interrupt", timeout_s=1.0)
-            t_interrupt = next(e.t_wall for e in sink.events if e.payload.get("type") == "interrupt")
+            t_interrupt = next(
+                e.t_wall for e in sink.events if e.payload.get("type") == "interrupt"
+            )
 
             # Measure: last audio frame after t_barge_start.
             last_audio_after_barge = [a for a in sink.audio if a.t_wall >= t_barge_start]
-            t_last_audio = last_audio_after_barge[-1].t_wall if last_audio_after_barge else t_barge_start
+            t_last_audio = (
+                last_audio_after_barge[-1].t_wall if last_audio_after_barge else t_barge_start
+            )
             gap_ms = (t_last_audio - t_barge_start) * 1000
 
             assert gap_ms < 100, (
@@ -423,45 +430,42 @@ async def test_barge_in_during_llm_before_first_tts_chunk() -> None:
             }
         )
         await asyncio.sleep(0.4)  # first-token stall; barge-in hits before.
-        await send(
-            {"type": "http.response.body", "body": _sse_event("too"), "more_body": True}
-        )
-        await send(
-            {"type": "http.response.body", "body": _sse_event(" late."), "more_body": True}
-        )
-        await send(
-            {"type": "http.response.body", "body": b"data: [DONE]\n\n", "more_body": True}
-        )
+        await send({"type": "http.response.body", "body": _sse_event("too"), "more_body": True})
+        await send({"type": "http.response.body", "body": _sse_event(" late."), "more_body": True})
+        await send({"type": "http.response.body", "body": b"data: [DONE]\n\n", "more_body": True})
         await send({"type": "http.response.body", "body": b"", "more_body": False})
 
-    async with _workers() as (funasr, vad, voxcpm):
-        async with _live_llm(slow_first_token_app) as base_url:
-            llm = LLMClient(api_key="x", base_url=f"{base_url}/api/v1")
-            sink = _RecordingSink()
-            session = ConversationSession(
-                cfg=ConversationConfig(llm_model="m"),
-                sink=sink, funasr=funasr, vad=vad, voxcpm=voxcpm, llm=llm,
-            )
-            run_task = asyncio.create_task(session.run())
+    async with _workers() as (funasr, vad, voxcpm), _live_llm(slow_first_token_app) as base_url:
+        llm = LLMClient(api_key="x", base_url=f"{base_url}/api/v1")
+        sink = _RecordingSink()
+        session = ConversationSession(
+            cfg=ConversationConfig(llm_model="m"),
+            sink=sink,
+            funasr=funasr,
+            vad=vad,
+            voxcpm=voxcpm,
+            llm=llm,
+        )
+        run_task = asyncio.create_task(session.run())
 
-            await _scripted_turn(session, ordinal=1, text="hello")
-            await _wait_for_state(session, SessionState.LLM_GENERATING)
+        await _scripted_turn(session, ordinal=1, text="hello")
+        await _wait_for_state(session, SessionState.LLM_GENERATING)
 
-            # Barge in while in LLM_GENERATING (before first TTS chunk).
-            t0 = time.monotonic()
-            await session._queue.put(  # noqa: SLF001
-                VADEvent(kind="speech_start", utterance_ordinal=2, session_ms=5000)
-            )
-            interrupt = await _wait_for_event(sink, "interrupt", timeout_s=1.0)
-            gap_ms = (time.monotonic() - t0) * 1000
-            # No audio ever emitted — we beat the first TTS chunk.
-            assert not sink.audio, f"unexpected audio frames: {len(sink.audio)}"
-            assert gap_ms < 200, f"LLM barge-in took {gap_ms:.0f}ms (target: <200ms)"
-            assert interrupt["new_utterance_ordinal"] == 2
-            assert not any(m.role == "assistant" for m in session._history)  # noqa: SLF001
+        # Barge in while in LLM_GENERATING (before first TTS chunk).
+        t0 = time.monotonic()
+        await session._queue.put(  # noqa: SLF001
+            VADEvent(kind="speech_start", utterance_ordinal=2, session_ms=5000)
+        )
+        interrupt = await _wait_for_event(sink, "interrupt", timeout_s=1.0)
+        gap_ms = (time.monotonic() - t0) * 1000
+        # No audio ever emitted — we beat the first TTS chunk.
+        assert not sink.audio, f"unexpected audio frames: {len(sink.audio)}"
+        assert gap_ms < 200, f"LLM barge-in took {gap_ms:.0f}ms (target: <200ms)"
+        assert interrupt["new_utterance_ordinal"] == 2
+        assert not any(m.role == "assistant" for m in session._history)  # noqa: SLF001
 
-            await session.stop()
-            await asyncio.wait_for(run_task, timeout=3.0)
+        await session.stop()
+        await asyncio.wait_for(run_task, timeout=3.0)
 
 
 @pytest.mark.asyncio
@@ -474,8 +478,11 @@ async def test_rapid_barge_in_of_barge_in() -> None:
             sink = _RecordingSink()
             session = ConversationSession(
                 cfg=ConversationConfig(llm_model="m"),
-                sink=sink, funasr=funasr, vad=vad,
-                voxcpm=slow_tts, llm=llm,  # type: ignore[arg-type]
+                sink=sink,
+                funasr=funasr,
+                vad=vad,
+                voxcpm=slow_tts,
+                llm=llm,  # type: ignore[arg-type]
             )
             run_task = asyncio.create_task(session.run())
 
@@ -532,7 +539,9 @@ async def test_network_failure_keeps_session_alive_next_turn_works() -> None:
     port_b = _pick_free_port()
 
     def _serve(app, port):
-        config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False, lifespan="off")
+        config = uvicorn.Config(
+            app, host="127.0.0.1", port=port, log_level="warning", access_log=False, lifespan="off"
+        )
         srv = uvicorn.Server(config)
         srv.install_signal_handlers = lambda: None  # type: ignore[method-assign]
         th = threading.Thread(target=srv.run, daemon=True)
@@ -555,7 +564,11 @@ async def test_network_failure_keeps_session_alive_next_turn_works() -> None:
             sink = _RecordingSink()
             session = ConversationSession(
                 cfg=ConversationConfig(llm_model="m", speech_end_silence_ms=200),
-                sink=sink, funasr=funasr, vad=vad, voxcpm=voxcpm, llm=llm_a,
+                sink=sink,
+                funasr=funasr,
+                vad=vad,
+                voxcpm=voxcpm,
+                llm=llm_a,
             )
             run_task = asyncio.create_task(session.run())
 
@@ -575,7 +588,11 @@ async def test_network_failure_keeps_session_alive_next_turn_works() -> None:
             sink = _RecordingSink()
             session = ConversationSession(
                 cfg=ConversationConfig(llm_model="m", speech_end_silence_ms=200),
-                sink=sink, funasr=funasr, vad=vad, voxcpm=voxcpm, llm=dead_llm,
+                sink=sink,
+                funasr=funasr,
+                vad=vad,
+                voxcpm=voxcpm,
+                llm=dead_llm,
             )
             run_task = asyncio.create_task(session.run())
 
@@ -620,7 +637,11 @@ async def test_no_orphan_tasks_after_many_turns() -> None:
             sink = _RecordingSink()
             session = ConversationSession(
                 cfg=ConversationConfig(llm_model="m", speech_end_silence_ms=200),
-                sink=sink, funasr=funasr, vad=vad, voxcpm=voxcpm, llm=llm,
+                sink=sink,
+                funasr=funasr,
+                vad=vad,
+                voxcpm=voxcpm,
+                llm=llm,
             )
             run_task = asyncio.create_task(session.run())
             for i in range(1, 51):
@@ -665,8 +686,11 @@ async def test_e5_two_speech_starts_in_one_tick_emit_exactly_one_interrupt() -> 
             sink = _RecordingSink()
             session = ConversationSession(
                 cfg=ConversationConfig(llm_model="m"),
-                sink=sink, funasr=funasr, vad=vad,
-                voxcpm=slow_tts, llm=llm,  # type: ignore[arg-type]
+                sink=sink,
+                funasr=funasr,
+                vad=vad,
+                voxcpm=slow_tts,
+                llm=llm,  # type: ignore[arg-type]
             )
             run_task = asyncio.create_task(session.run())
 

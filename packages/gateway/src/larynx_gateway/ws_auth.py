@@ -33,9 +33,7 @@ async def require_ws_bearer_token(ws: WebSocket) -> bool:
         supplied = ws.query_params.get("token")
 
     if supplied is None:
-        await ws.close(
-            code=status.WS_1008_POLICY_VIOLATION, reason="missing bearer token"
-        )
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason="missing bearer token")
         return False
 
     if len(supplied) != len(expected):

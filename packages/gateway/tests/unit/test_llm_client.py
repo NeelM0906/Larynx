@@ -11,7 +11,6 @@ import json
 
 import httpx
 import pytest
-
 from larynx_gateway.services.llm_client import (
     ChatMessage,
     LLMClient,
@@ -76,11 +75,11 @@ async def test_stream_chat_yields_content_deltas_in_order() -> None:
 @pytest.mark.asyncio
 async def test_stream_chat_ignores_keepalive_and_empty_deltas() -> None:
     events = [
-        ": ping\n\n",                                              # comment keepalive
-        {"choices": [{"delta": {}}]},                              # empty delta
-        {"choices": [{"delta": {"role": "assistant"}}]},           # role-only, no content
-        {"choices": [{"delta": {"content": "ok"}}]},               # the one we want
-        "event: ping\n\n",                                         # non-data event
+        ": ping\n\n",  # comment keepalive
+        {"choices": [{"delta": {}}]},  # empty delta
+        {"choices": [{"delta": {"role": "assistant"}}]},  # role-only, no content
+        {"choices": [{"delta": {"content": "ok"}}]},  # the one we want
+        "event: ping\n\n",  # non-data event
         "data: [DONE]\n\n",
     ]
     client = _make_client_with_transport(

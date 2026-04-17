@@ -199,7 +199,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # registered above and take precedence.
     _playground_dir = pathlib.Path(__file__).resolve().parents[4] / "apps" / "playground-test"
     if _playground_dir.is_dir():
-        app.mount("/playground", StaticFiles(directory=_playground_dir, html=True), name="playground")
+        app.mount(
+            "/playground", StaticFiles(directory=_playground_dir, html=True), name="playground"
+        )
 
     return app
 

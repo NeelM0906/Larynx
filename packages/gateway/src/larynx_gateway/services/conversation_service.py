@@ -26,7 +26,7 @@ import string
 import time
 import tomllib
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -71,11 +71,26 @@ _SENTENCE_BOUNDARY_CHARS = frozenset(".!?。！？")
 _DEFAULT_FILLER_TOKENS: frozenset[str] = frozenset(
     {
         # English
-        "uh", "um", "hmm", "mm", "ah", "er", "eh", "huh",
+        "uh",
+        "um",
+        "hmm",
+        "mm",
+        "ah",
+        "er",
+        "eh",
+        "huh",
         # Chinese
-        "嗯", "呃", "啊", "哦", "哎",
+        "嗯",
+        "呃",
+        "啊",
+        "哦",
+        "哎",
         # Japanese
-        "えー", "あのー", "ええと", "えっと", "うーん",
+        "えー",
+        "あのー",
+        "ええと",
+        "えっと",
+        "うーん",
     }
 )
 
@@ -379,11 +394,19 @@ class ConversationSession:
                 ord_ = int(ev.get("utterance_ordinal", 0))
                 if et == "speech_start":
                     await self._queue.put(
-                        VADEvent(kind="speech_start", utterance_ordinal=ord_, session_ms=int(ev.get("session_ms", 0)))
+                        VADEvent(
+                            kind="speech_start",
+                            utterance_ordinal=ord_,
+                            session_ms=int(ev.get("session_ms", 0)),
+                        )
                     )
                 elif et == "speech_end":
                     await self._queue.put(
-                        VADEvent(kind="speech_end", utterance_ordinal=ord_, session_ms=int(ev.get("session_ms", 0)))
+                        VADEvent(
+                            kind="speech_end",
+                            utterance_ordinal=ord_,
+                            session_ms=int(ev.get("session_ms", 0)),
+                        )
                     )
                 elif et == "partial":
                     await self._queue.put(
@@ -578,9 +601,7 @@ class ConversationSession:
                 )
             )
             return
-        await self._queue.put(
-            LLMEvent(kind="llm_done", utterance_ordinal=ordinal)
-        )
+        await self._queue.put(LLMEvent(kind="llm_done", utterance_ordinal=ordinal))
 
     async def _on_llm(self, ev: LLMEvent) -> None:
         # Drop events from a turn that was cancelled out from under us.
@@ -591,9 +612,7 @@ class ConversationSession:
                 self._timings.llm_first_token_wall = time.monotonic()
             self._provisional_assistant_text += ev.delta
             self._llm_token_buffer += ev.delta
-            await self._sink.send_event(
-                {"type": "response.text_delta", "delta": ev.delta}
-            )
+            await self._sink.send_event({"type": "response.text_delta", "delta": ev.delta})
             # Drain complete sentences into the TTS queue.
             while True:
                 sentence, remainder = _pop_complete_sentence(self._llm_token_buffer)
@@ -634,9 +653,7 @@ class ConversationSession:
         # Drop any enqueued sentences that were never handed off.
         self._sentence_queue.clear()
         self._provisional_assistant_text = ""
-        await self._sink.send_event(
-            {"type": "error", "code": code, "message": msg}
-        )
+        await self._sink.send_event({"type": "error", "code": code, "message": msg})
         self._state = SessionState.IDLE
         self._pending_llm_task = None
         await self._send_status()
@@ -683,9 +700,7 @@ class ConversationSession:
                             )
                         )
                     elif isinstance(frame, SynthesizeDoneFrame):
-                        await self._queue.put(
-                            TTSEvent(kind="tts_done", utterance_ordinal=ordinal)
-                        )
+                        await self._queue.put(TTSEvent(kind="tts_done", utterance_ordinal=ordinal))
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -754,9 +769,7 @@ class ConversationSession:
             return
         # Clean finish.
         if self._provisional_assistant_text.strip():
-            self._history.append(
-                ChatMessage("assistant", self._provisional_assistant_text.strip())
-            )
+            self._history.append(ChatMessage("assistant", self._provisional_assistant_text.strip()))
         self._provisional_assistant_text = ""
         self._pending_llm_task = None
         self._timings.turn_complete_wall = time.monotonic()
@@ -785,12 +798,8 @@ class ConversationSession:
 
         return {
             "stt_final_after_speech_end_ms": _delta(t.speech_end_wall, t.stt_final_wall),
-            "llm_first_token_after_stt_final_ms": _delta(
-                t.stt_final_wall, t.llm_first_token_wall
-            ),
-            "tts_ttfb_after_llm_first_token_ms": _delta(
-                t.llm_first_token_wall, t.tts_ttfb_wall
-            ),
+            "llm_first_token_after_stt_final_ms": _delta(t.stt_final_wall, t.llm_first_token_wall),
+            "tts_ttfb_after_llm_first_token_ms": _delta(t.llm_first_token_wall, t.tts_ttfb_wall),
             "end_to_end_ms": self._compute_turn_latency_ms(),
         }
 
@@ -886,9 +895,7 @@ class ConversationSession:
         await self._pcm_queue.put(None)
         if self._stt_session_task is not None:
             with contextlib.suppress(BaseException):
-                await asyncio.wait_for(
-                    self._stt_session_task, timeout=SHUTDOWN_GRACE_SECONDS
-                )
+                await asyncio.wait_for(self._stt_session_task, timeout=SHUTDOWN_GRACE_SECONDS)
         if self._stt_adapter_task is not None:
             self._stt_adapter_task.cancel()
             with contextlib.suppress(BaseException):

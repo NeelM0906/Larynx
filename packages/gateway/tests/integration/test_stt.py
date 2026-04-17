@@ -104,9 +104,7 @@ async def test_stt_unsupported_language_returns_400(
 
 
 @pytest.mark.asyncio
-async def test_stt_hotwords_passthrough(
-    client: AsyncClient, auth_headers: dict[str, str]
-) -> None:
+async def test_stt_hotwords_passthrough(client: AsyncClient, auth_headers: dict[str, str]) -> None:
     r = await client.post(
         "/v1/stt",
         headers=auth_headers,

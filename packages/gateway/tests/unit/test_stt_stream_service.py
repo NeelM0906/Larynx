@@ -11,11 +11,10 @@ import asyncio
 
 import numpy as np
 import pytest
-from larynx_shared.ipc import WorkerChannel
-
 from larynx_gateway.services.stt_stream_service import STTStreamConfig, STTStreamSession
 from larynx_gateway.workers_client.funasr_client import FunASRClient
 from larynx_gateway.workers_client.vad_punc_client import VadPuncClient
+from larynx_shared.ipc import WorkerChannel
 
 
 def _tone(ms: int, sr: int = 16000, freq: float = 220.0, amp: float = 0.5) -> bytes:
@@ -157,7 +156,9 @@ async def test_utterance_ordinal_starts_at_one_and_is_stamped_on_all_events() ->
         await session.run(source())
         await drain_task
 
-        stamped = [e for e in events if e["type"] in {"speech_start", "speech_end", "partial", "final"}]
+        stamped = [
+            e for e in events if e["type"] in {"speech_start", "speech_end", "partial", "final"}
+        ]
         assert stamped, "expected at least one stamped event"
         for ev in stamped:
             assert "utterance_ordinal" in ev, f"missing ordinal on {ev}"

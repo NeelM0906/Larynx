@@ -68,6 +68,4 @@ class FunASRClient:
             is_final=is_final,
             drop_tail_tokens=drop_tail_tokens,
         )
-        return await self._rpc.request(
-            req, TranscribeRollingResponse, timeout=self._timeout_s
-        )
+        return await self._rpc.request(req, TranscribeRollingResponse, timeout=self._timeout_s)
