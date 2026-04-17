@@ -9,12 +9,14 @@ See ORCHESTRATION-M7.md §8.2.
 """
 
 from larynx_shared.paths.layout import (
+    SUPPORTED_AUDIO_SUFFIXES,
     DatasetPaths,
     JobPaths,
     lora_weights_dir,
 )
 
 __all__ = [
+    "SUPPORTED_AUDIO_SUFFIXES",
     "DatasetPaths",
     "JobPaths",
     "lora_weights_dir",
