@@ -82,6 +82,12 @@ class _TTSStreamConfig(BaseModel):
 @router.websocket("/tts/stream")
 async def ws_tts_stream(ws: WebSocket) -> None:
     await ws.accept()
+    # Reject new sessions once the gateway has started draining — the
+    # /ready endpoint already returns 503 in this state, but LBs may
+    # still have an in-flight handshake we can short-circuit here.
+    if getattr(ws.app.state, "shutting_down", False):
+        await _send_error(ws, "shutting_down", "gateway is draining")
+        return
     if not await require_ws_bearer_token(ws):
         return
 
