@@ -1,0 +1,13 @@
+# Filler-token set used by ConversationSession's empty-transcript check
+# (ORCHESTRATION.md v2 §5 E7). Fun-ASR emits noise-driven false finals —
+# single fillers, throat clears — so we skip LLM calls on these to avoid
+# phantom replies on background noise.
+#
+# One set per language; loader unions them all. Tokens are compared
+# after lowercase + punctuation-strip, so plain-ASCII spellings are fine
+# for latin languages.
+
+[filler_tokens]
+en = ["uh", "um", "hmm", "mm", "ah", "er", "eh", "huh"]
+zh = ["嗯", "呃", "啊", "哦", "哎"]
+ja = ["えー", "あのー", "ええと", "えっと", "うーん"]
