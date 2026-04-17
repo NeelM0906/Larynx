@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>TTS stream test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2em auto; padding: 0 1em; color: #222; }
+    textarea { width: 100%; height: 120px; font: 14px/1.4 system-ui; padding: 8px; box-sizing: border-box; }
+    input[type=text] { width: 100%; padding: 6px; box-sizing: border-box; font: 14px monospace; }
+    label { display:block; font-size: 13px; color: #555; margin: 12px 0 4px; }
+    button { padding: 8px 16px; font-size: 14px; cursor: pointer; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row > * { flex: 0 0 auto; }
+    .metrics { font: 13px/1.5 monospace; background: #f7f7f7; padding: 10px; border-radius: 6px; margin-top: 1em; white-space: pre-wrap; }
+    .log { font: 12px/1.4 monospace; background: #222; color: #ddd; padding: 8px; border-radius: 6px; margin-top: 8px; height: 160px; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <h1>TTS streaming</h1>
+
+  <label>Gateway host (ws)</label>
+  <input id="host" type="text" value="ws://localhost:8000" />
+
+  <label>Bearer token</label>
+  <input id="token" type="text" placeholder="LARYNX_API_TOKEN" />
+
+  <label>Text</label>
+  <textarea id="text">Streaming is what turns a latency problem into a real-time experience.</textarea>
+
+  <label>Voice ID (optional — leave blank for default)</label>
+  <input id="voice" type="text" />
+
+  <div class="row" style="margin-top: 1em;">
+    <label for="sr" style="margin: 0;">sample_rate</label>
+    <input id="sr" type="text" value="24000" style="width: 80px; margin-right: 8px;" />
+    <button id="play">Play</button>
+    <button id="stop">Stop</button>
+  </div>
+
+  <div class="metrics" id="metrics">metrics: —</div>
+  <div class="log" id="log"></div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Minimal streaming PCM16 → WebAudio player. No buffering beyond what the
+// WebAudio scheduler needs — each binary WS frame becomes one AudioBuffer
+// scheduled at nextStartTime, which advances by each chunk's duration.
+// ---------------------------------------------------------------------------
+
+const logEl = document.getElementById("log");
+const metricsEl = document.getElementById("metrics");
+function log(...args) {
+  logEl.textContent += args.join(" ") + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+let ws = null;
+let audioCtx = null;
+let nextStartTime = 0;
+
+function pcm16ToFloat(bytes) {
+  // bytes is an ArrayBuffer of int16 little-endian.
+  const view = new DataView(bytes);
+  const n = bytes.byteLength / 2;
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    out[i] = view.getInt16(i * 2, /*littleEndian*/ true) / 32768;
+  }
+  return out;
+}
+
+function scheduleChunk(pcmBytes, sampleRate) {
+  const floats = pcm16ToFloat(pcmBytes);
+  const buf = audioCtx.createBuffer(1, floats.length, sampleRate);
+  buf.getChannelData(0).set(floats);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+  const startAt = Math.max(audioCtx.currentTime, nextStartTime);
+  src.start(startAt);
+  nextStartTime = startAt + buf.duration;
+}
+
+function stopAll() {
+  if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+  if (audioCtx) { try { audioCtx.close(); } catch (_) {} audioCtx = null; }
+  nextStartTime = 0;
+}
+
+document.getElementById("stop").onclick = stopAll;
+
+document.getElementById("play").onclick = async () => {
+  stopAll();
+  logEl.textContent = "";
+  const host = document.getElementById("host").value.trim();
+  const token = document.getElementById("token").value.trim();
+  const text = document.getElementById("text").value.trim();
+  const voice = document.getElementById("voice").value.trim() || null;
+  const sampleRate = parseInt(document.getElementById("sr").value, 10) || 24000;
+  if (!host || !token || !text) { log("host/token/text required"); return; }
+
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate });
+  nextStartTime = 0;
+
+  const url = `${host}/v1/tts/stream?token=${encodeURIComponent(token)}`;
+  log("connecting", url);
+  ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+
+  const tConnect = performance.now();
+  let tFirstByte = 0;
+  let bytes = 0;
+  let chunks = 0;
+
+  ws.onopen = () => {
+    const cfg = {
+      type: "synthesize",
+      text,
+      voice_id: voice,
+      sample_rate: sampleRate,
+      crossfade_ms: 10,
+    };
+    log("sending config", JSON.stringify(cfg));
+    ws.send(JSON.stringify(cfg));
+  };
+
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") {
+      // done / error frame
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "done") {
+        const totalMs = performance.now() - tConnect;
+        const ttfbMs = tFirstByte ? (tFirstByte - tConnect) : 0;
+        metricsEl.textContent =
+          `browser TTFB     : ${ttfbMs.toFixed(1)} ms\n` +
+          `server TTFB      : ${msg.ttfb_ms} ms\n` +
+          `audio duration   : ${msg.total_duration_ms} ms\n` +
+          `bytes received   : ${bytes}\n` +
+          `chunks received  : ${chunks}\n` +
+          `wall clock       : ${totalMs.toFixed(1)} ms`;
+        log("done", JSON.stringify(msg));
+      } else if (msg.type === "error") {
+        metricsEl.textContent = "ERROR " + JSON.stringify(msg);
+        log("error", JSON.stringify(msg));
+      }
+    } else {
+      if (!tFirstByte) tFirstByte = performance.now();
+      bytes += ev.data.byteLength;
+      chunks += 1;
+      scheduleChunk(ev.data, sampleRate);
+    }
+  };
+
+  ws.onclose = (ev) => log(`closed code=${ev.code} reason=${ev.reason}`);
+  ws.onerror = (ev) => log("ws error", String(ev));
+};
+</script>
+</body>
+</html>
