@@ -17,6 +17,7 @@ Mode selection: ``LARYNX_TTS_MODE`` env var (see .env.example).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import math
@@ -376,6 +377,20 @@ class VoxCPMBackendReal(VoxCPMBackend):
         self._lora_config = lora_config
         self._pool: Any | None = None
         self._info: ModelInfo | None = None
+        # Installed ``nano-vllm-voxcpm==2.0.0`` exposes a per-session
+        # LoRA API (``load_lora(path)`` + ``set_lora_enabled(bool)``),
+        # not the per-request ``register_lora(name, path)`` +
+        # ``generate(lora_name=...)`` surface the design doc sketched
+        # against the ``third_party/`` HEAD. We keep our public
+        # ``load_lora(name, path)`` / ``unload_lora(name)`` /
+        # ``list_loras()`` contract and implement it on top of 2.0.0
+        # by maintaining the name→path mapping ourselves + swapping
+        # the active LoRA on the pool lazily before each synthesize.
+        # ``_lora_lock`` serialises concurrent synthesis that would
+        # otherwise race on the swap.
+        self._loras: dict[str, str] = {}
+        self._active_lora: str | None = None
+        self._lora_lock: asyncio.Lock | None = None
 
     async def load(self) -> None:
         try:
@@ -493,6 +508,25 @@ class VoxCPMBackendReal(VoxCPMBackend):
         if not text:
             raise ValueError("text must not be empty")
 
+        # Swap the active LoRA on the underlying pool if the request
+        # asks for one different from what's currently active. The swap
+        # is serialised by ``_lora_lock`` so two concurrent syntheses
+        # don't race on it. Synthesis itself is allowed to interleave
+        # once the right LoRA is active (the generate call is a
+        # concurrent read from the pool's perspective).
+        if lora_name is not None and lora_name not in self._loras:
+            raise ValueError(f"LoRA {lora_name!r} is not registered")
+        if self._lora_lock is None:
+            self._lora_lock = asyncio.Lock()
+        async with self._lora_lock:
+            if lora_name != self._active_lora:
+                if lora_name is None:
+                    await self._pool.set_lora_enabled(False)
+                else:
+                    await self._pool.load_lora(self._loras[lora_name])
+                    await self._pool.set_lora_enabled(True)
+                self._active_lora = lora_name
+
         async for chunk in self._pool.generate(
             target_text=text,
             prompt_latents=prompt_audio_latents,
@@ -502,11 +536,16 @@ class VoxCPMBackendReal(VoxCPMBackend):
             temperature=temperature,
             cfg_value=cfg_value,
             ref_audio_latents=ref_audio_latents,
-            lora_name=lora_name,
         ):
             yield np.asarray(chunk, dtype=np.float32).reshape(-1)
 
     # -- LoRA hot-swap (real) -----------------------------------------------
+    #
+    # Upstream ``nano-vllm-voxcpm==2.0.0`` gives us a per-session LoRA
+    # API — see the class docstring + __init__ for why we wrap it in
+    # our own name-keyed registry. When a newer upstream ships the
+    # per-request ``register_lora(name, path)`` + ``lora_name`` generate
+    # kwarg, we can flip this to a thin delegate.
 
     async def load_lora(self, name: str, path: str) -> None:
         if self._pool is None:
@@ -516,19 +555,27 @@ class VoxCPMBackendReal(VoxCPMBackend):
                 "LoRA is not enabled on this backend; pass lora_config to "
                 "VoxCPMBackendReal() at init or set LARYNX_VOXCPM_LORA_* env."
             )
-        await self._pool.register_lora(name, path)
+        if name in self._loras:
+            raise ValueError(f"LoRA {name!r} is already registered")
+        self._loras[name] = path
 
     async def unload_lora(self, name: str) -> None:
         if self._pool is None:
             raise RuntimeError("backend not loaded")
-        await self._pool.unregister_lora(name)
+        if name not in self._loras:
+            raise ValueError(f"LoRA {name!r} is not registered")
+        if self._active_lora == name:
+            # Drop it off the pool before forgetting it on our side so
+            # a later synthesis without a ``lora_name`` gets base
+            # weights, not a stale adapter.
+            await self._pool.set_lora_enabled(False)
+            self._active_lora = None
+        del self._loras[name]
 
     async def list_loras(self) -> list[str]:
         if self._pool is None:
             raise RuntimeError("backend not loaded")
-        entries = await self._pool.list_loras()
-        # Upstream returns LoRAInfo objects with a `.name` attr.
-        return sorted(entry.name for entry in entries)
+        return sorted(self._loras)
 
     async def close(self) -> None:
         pool = self._pool
