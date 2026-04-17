@@ -47,3 +47,12 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         raise RuntimeError("session factory not initialised (lifespan did not run?)")
     async with _sessionmaker() as session:
         yield session
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Return the configured session factory. WS handlers (which can't use
+    ``Depends`` chaining across the lifespan) open sessions off this
+    directly."""
+    if _sessionmaker is None:
+        raise RuntimeError("session factory not initialised (lifespan did not run?)")
+    return _sessionmaker

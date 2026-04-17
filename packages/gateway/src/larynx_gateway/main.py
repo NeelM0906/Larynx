@@ -27,7 +27,7 @@ from larynx_voxcpm_worker.server import WorkerServer
 from larynx_gateway.config import Settings, get_settings
 from larynx_gateway.db.session import dispose_engine, init_engine
 from larynx_gateway.logging import configure_logging
-from larynx_gateway.routes import health, stt, tts, voices
+from larynx_gateway.routes import health, stt, tts, tts_stream, voices
 from larynx_gateway.services.latent_cache import LatentCache, build_redis_client
 from larynx_gateway.services.voice_files import resolve_data_dir
 from larynx_gateway.workers_client.base import WorkerChannel
@@ -160,6 +160,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(tts.router)
+    app.include_router(tts_stream.router)
     app.include_router(voices.router)
     app.include_router(stt.router)
     from larynx_gateway.routes import openai_compat
