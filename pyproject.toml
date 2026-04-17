@@ -7,6 +7,7 @@ dependencies = [
     "larynx-shared",
     "larynx-voxcpm-worker",
     "larynx-funasr-worker",
+    "larynx-vad-punc-worker",
     "larynx-gateway",
 ]
 
@@ -35,6 +36,7 @@ members = [
     "packages/shared",
     "packages/voxcpm_worker",
     "packages/funasr_worker",
+    "packages/vad_punc_worker",
     "packages/gateway",
 ]
 
@@ -43,6 +45,7 @@ larynx-shared = { workspace = true }
 larynx-gateway = { workspace = true }
 larynx-voxcpm-worker = { workspace = true }
 larynx-funasr-worker = { workspace = true }
+larynx-vad-punc-worker = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -75,6 +78,7 @@ testpaths = [
     "packages/gateway/tests",
     "packages/voxcpm_worker/tests",
     "packages/funasr_worker/tests",
+    "packages/vad_punc_worker/tests",
     "packages/shared/tests",
 ]
 # Tests that require loading the actual VoxCPM2 / Fun-ASR models on GPU.

@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     larynx_funasr_gpu: int = 1  # GPU 1 by PRD §6
     larynx_funasr_gpu_mem_util: float = 0.4
 
+    # VAD + Punctuation worker
+    larynx_vad_punc_mode: str = Field(default="mock")  # "mock" | "real"
+    larynx_vad_model: str = "fsmn-vad"
+    larynx_punc_model: str = "ct-punc"
+
     # Storage
     database_url: str = "postgresql+psycopg://larynx:larynx@localhost:5433/larynx"
     redis_url: str = "redis://localhost:6380/0"

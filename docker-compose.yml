@@ -57,6 +57,23 @@ services:
               capabilities: ["gpu"]
     restart: unless-stopped
 
+  # VAD + Punctuation worker — CPU only.
+  vad_punc_worker:
+    profiles: ["workers"]
+    build:
+      context: .
+      dockerfile: docker/vad_punc_worker.Dockerfile
+    container_name: larynx-vad-punc-worker
+    environment:
+      LARYNX_VAD_PUNC_MODE: real
+      LARYNX_VAD_MODEL: fsmn-vad
+      LARYNX_PUNC_MODEL: ct-punc
+      HF_HOME: /app/.cache/huggingface
+    volumes:
+      - .:/app
+      - larynx-hf-cache:/app/.cache/huggingface
+    restart: unless-stopped
+
 volumes:
   larynx-postgres-data:
   larynx-redis-data:

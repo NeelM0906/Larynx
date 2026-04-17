@@ -19,6 +19,8 @@ import structlog
 from fastapi import FastAPI
 from larynx_funasr_worker.model_manager import FunASRModelManager
 from larynx_funasr_worker.server import WorkerServer as FunASRWorkerServer
+from larynx_vad_punc_worker.model_manager import VadPuncModelManager
+from larynx_vad_punc_worker.server import WorkerServer as VadPuncWorkerServer
 from larynx_voxcpm_worker.model_manager import VoxCPMModelManager
 from larynx_voxcpm_worker.server import WorkerServer
 
@@ -30,6 +32,7 @@ from larynx_gateway.services.latent_cache import LatentCache, build_redis_client
 from larynx_gateway.services.voice_files import resolve_data_dir
 from larynx_gateway.workers_client.base import WorkerChannel
 from larynx_gateway.workers_client.funasr_client import FunASRClient
+from larynx_gateway.workers_client.vad_punc_client import VadPuncClient
 from larynx_gateway.workers_client.voxcpm_client import VoxCPMClient
 
 log = structlog.get_logger(__name__)
@@ -94,12 +97,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.funasr_worker = funasr_worker
     app.state.funasr_client = funasr_client
 
+    # VAD + Punctuation worker (CPU-only; always in-process since the
+    # overhead of IPC dominates its CPU cost).
+    os.environ.setdefault("LARYNX_VAD_PUNC_MODE", settings.larynx_vad_punc_mode)
+    os.environ.setdefault("LARYNX_VAD_MODEL", settings.larynx_vad_model)
+    os.environ.setdefault("LARYNX_PUNC_MODEL", settings.larynx_punc_model)
+
+    vad_punc_manager = await VadPuncModelManager.from_env()
+    vad_punc_channel = WorkerChannel()
+    vad_punc_worker = VadPuncWorkerServer(vad_punc_channel, vad_punc_manager)
+    vad_punc_client = VadPuncClient(vad_punc_channel)
+    await vad_punc_client.start()
+    await vad_punc_worker.start()
+
+    app.state.vad_punc_manager = vad_punc_manager
+    app.state.vad_punc_worker = vad_punc_worker
+    app.state.vad_punc_client = vad_punc_client
+
     app.state.worker_ready = True
 
     log.info(
         "gateway.ready",
         tts_mode=manager.mode.value,
         stt_mode=funasr_manager.mode.value,
+        vad_punc_mode=vad_punc_manager.mode.value,
         port=settings.larynx_port,
         db=_redact(settings.database_url),
         redis=_redact(settings.redis_url),
@@ -114,6 +135,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await client.stop()
         await funasr_worker.stop()
         await funasr_client.stop()
+        await vad_punc_worker.stop()
+        await vad_punc_client.stop()
         try:
             await redis_client.aclose()
         except Exception:

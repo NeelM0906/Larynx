@@ -95,6 +95,7 @@ def _session_env() -> None:
     os.environ["LARYNX_API_TOKEN"] = TEST_TOKEN
     os.environ["LARYNX_TTS_MODE"] = "mock"
     os.environ["LARYNX_STT_MODE"] = "mock"
+    os.environ["LARYNX_VAD_PUNC_MODE"] = "mock"
     os.environ["LARYNX_LOG_JSON"] = "false"
     os.environ["DATABASE_URL"] = TEST_DB_URL_SQLA
     os.environ["REDIS_URL"] = TEST_REDIS_URL
