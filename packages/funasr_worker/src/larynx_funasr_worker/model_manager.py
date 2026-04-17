@@ -237,14 +237,35 @@ class FunASRBackendReal(FunASRBackend):
         device = f"cuda:{self._gpu}"
         log.info("funasr.loading", device=device, nano=NANO_MODEL, mlt=MLT_MODEL)
 
+        # vLLM spawns a child subprocess for its GPU worker. The child only
+        # sees the devices listed in CUDA_VISIBLE_DEVICES, and vLLM ignores
+        # the torch device hint on the parent-side FunASRNano call. We
+        # temporarily pin CUDA_VISIBLE_DEVICES to the target GPU around each
+        # LLM() init so the worker lands on GPU 1 and doesn't fight VoxCPM
+        # on GPU 0 for the KV-cache reservation.
+        import contextlib
+
+        @contextlib.contextmanager
+        def _pinned_visible_devices(gpu: int) -> Any:
+            prev = os.environ.get("CUDA_VISIBLE_DEVICES")
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
+            try:
+                yield
+            finally:
+                if prev is None:
+                    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+                else:
+                    os.environ["CUDA_VISIBLE_DEVICES"] = prev
+
         nano, nano_kwargs = FunASRNano.from_pretrained(model=NANO_MODEL, device=device)
         nano.eval()
-        nano_vllm = LLM(
-            model=NANO_VLLM,
-            enable_prompt_embeds=True,
-            gpu_memory_utilization=self._gpu_mem,
-            dtype="bfloat16",
-        )
+        with _pinned_visible_devices(self._gpu):
+            nano_vllm = LLM(
+                model=NANO_VLLM,
+                enable_prompt_embeds=True,
+                gpu_memory_utilization=self._gpu_mem,
+                dtype="bfloat16",
+            )
         nano.vllm = nano_vllm
         nano.vllm_sampling_params = SamplingParams(top_p=self._top_p, max_tokens=self._max_tokens)
         self._models[FunASRModel.NANO] = _LoadedModel(
@@ -256,12 +277,13 @@ class FunASRBackendReal(FunASRBackend):
 
         mlt, mlt_kwargs = FunASRNano.from_pretrained(model=MLT_MODEL, device=device)
         mlt.eval()
-        mlt_vllm = LLM(
-            model=MLT_VLLM,
-            enable_prompt_embeds=True,
-            gpu_memory_utilization=self._gpu_mem,
-            dtype="bfloat16",
-        )
+        with _pinned_visible_devices(self._gpu):
+            mlt_vllm = LLM(
+                model=MLT_VLLM,
+                enable_prompt_embeds=True,
+                gpu_memory_utilization=self._gpu_mem,
+                dtype="bfloat16",
+            )
         mlt.vllm = mlt_vllm
         mlt.vllm_sampling_params = SamplingParams(top_p=self._top_p, max_tokens=self._max_tokens)
         self._models[FunASRModel.MLT] = _LoadedModel(
