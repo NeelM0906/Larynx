@@ -1,9 +1,23 @@
 #!/usr/bin/env python
-"""Seed the voice library with 3 public-domain LibriVox voices.
+"""Seed the voice library with six voices named for the OpenAI presets.
 
-Idempotent: checks the gateway's GET /v1/voices before each upload and
-skips any voice whose name already exists. Downloads each clip once
-into ``${DATA_DIR}/seed_cache/`` so re-runs are cheap.
+Idempotent: checks the gateway's GET /v1/voices before each operation and
+skips what's already present. Re-runs on an existing library are free.
+
+The six voices:
+
+- ``alloy``   — uploaded from a LibriVox chapter (warm male baritone)
+- ``echo``    — uploaded from a LibriVox chapter (expressive older male)
+- ``nova``    — uploaded from a LibriVox chapter (clear female narrator)
+- ``fable``   — designed via POST /v1/voices/design
+- ``onyx``    — designed
+- ``shimmer`` — designed
+
+The older seed names (``librivox-male-baritone`` / ``librivox-male-
+expressive`` / ``librivox-female-clear``) are left alone when present —
+the shim only looks up by the new names, and the /v1/voices API doesn't
+expose a rename verb. Admins can ``DELETE`` the old rows once the new
+ones are confirmed.
 
 Requires a running gateway on ``LARYNX_GATEWAY_URL`` (default
 http://localhost:8000) with ``LARYNX_API_TOKEN`` set. Run after
@@ -18,6 +32,7 @@ import os
 import pathlib
 import sys
 import tempfile
+import time
 import urllib.request
 from typing import Any
 
@@ -25,39 +40,64 @@ import httpx
 
 
 @dataclasses.dataclass(frozen=True)
-class SeedVoice:
+class UploadSeed:
+    """A voice sourced by slicing a LibriVox chapter mp3."""
+
     name: str
     description: str
     url: str
     # LibriVox chapter clips are ~30 minutes; we slice 15 s out of a
     # stable offset so the sample is short + consistent across runs.
-    start_s: float = 0.0
+    start_s: float = 2.0
     duration_s: float = 15.0
 
 
-# Three LibriVox chapter recordings on a range of voice qualities.
-# The Internet Archive serves raw 128 kbps MP3s from librivox.org.
-SEEDS: list[SeedVoice] = [
-    SeedVoice(
-        name="librivox-male-baritone",
-        description="Seed voice — warm male baritone, moderate pace.",
+@dataclasses.dataclass(frozen=True)
+class DesignSeed:
+    """A voice sourced via POST /v1/voices/design + /save."""
+
+    name: str
+    description: str
+    design_prompt: str
+
+
+# Three LibriVox chapter recordings, each saved under an OpenAI-preset
+# short-name so /v1/audio/speech can do a direct name lookup.
+UPLOAD_SEEDS: list[UploadSeed] = [
+    UploadSeed(
+        name="alloy",
+        description="Warm male baritone, moderate pace (seeded from LibriVox).",
         url="https://www.archive.org/download/alice_in_wonderland_librivox/wonderland_ch_01_carroll.mp3",
-        start_s=2.0,
-        duration_s=15.0,
     ),
-    SeedVoice(
-        name="librivox-female-clear",
-        description="Seed voice — clear female narrator.",
-        url="https://www.archive.org/download/pride_prejudice_librivox/prideandprejudice_01_austen.mp3",
-        start_s=2.0,
-        duration_s=15.0,
-    ),
-    SeedVoice(
-        name="librivox-male-expressive",
-        description="Seed voice — expressive older male.",
+    UploadSeed(
+        name="echo",
+        description="Expressive older male (seeded from LibriVox).",
         url="https://www.archive.org/download/sherlockholmes_advsh_librivox/sherlockholmes_advsh_01_doyle.mp3",
-        start_s=2.0,
-        duration_s=15.0,
+    ),
+    UploadSeed(
+        name="nova",
+        description="Clear female narrator (seeded from LibriVox).",
+        url="https://www.archive.org/download/pride_prejudice_librivox/prideandprejudice_01_austen.mp3",
+    ),
+]
+
+
+# Three designed voices, shapes fixed by the M8 spec (ORCHESTRATION-M8.md §2.2).
+DESIGN_SEEDS: list[DesignSeed] = [
+    DesignSeed(
+        name="fable",
+        description="Warm mid-range male storyteller, unhurried pace, British English.",
+        design_prompt="warm mid-range male storyteller, unhurried pace, British English",
+    ),
+    DesignSeed(
+        name="onyx",
+        description="Deep resonant male, measured and authoritative, American English.",
+        design_prompt="deep resonant male, measured and authoritative, American English",
+    ),
+    DesignSeed(
+        name="shimmer",
+        description="Soft intimate female, breathy but clear, American English.",
+        design_prompt="soft intimate female, breathy but clear, American English",
     ),
 ]
 
@@ -75,6 +115,11 @@ def parse_args() -> argparse.Namespace:
         default=pathlib.Path(
             os.environ.get("LARYNX_SEED_CACHE", tempfile.gettempdir() + "/larynx-seeds")
         ),
+    )
+    p.add_argument(
+        "--skip-designed",
+        action="store_true",
+        help="Only load the three upload seeds (useful when the worker's design path is slow).",
     )
     return p.parse_args()
 
@@ -108,12 +153,16 @@ def slice_audio(mp3: pathlib.Path, start_s: float, duration_s: float) -> bytes:
 
 
 def list_existing(client: httpx.Client, url: str, token: str) -> set[str]:
-    r = client.get(f"{url}/v1/voices", headers={"Authorization": f"Bearer {token}"})
+    r = client.get(
+        f"{url}/v1/voices",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"limit": 500},
+    )
     r.raise_for_status()
     return {v["name"] for v in r.json()["voices"]}
 
 
-def upload(client: httpx.Client, url: str, token: str, seed: SeedVoice, audio: bytes) -> Any:
+def upload(client: httpx.Client, url: str, token: str, seed: UploadSeed, audio: bytes) -> Any:
     r = client.post(
         f"{url}/v1/voices",
         headers={"Authorization": f"Bearer {token}"},
@@ -122,6 +171,36 @@ def upload(client: httpx.Client, url: str, token: str, seed: SeedVoice, audio: b
     )
     r.raise_for_status()
     return r.json()
+
+
+def design(client: httpx.Client, url: str, token: str, seed: DesignSeed) -> Any:
+    """Run /v1/voices/design followed by /save — two-step flow.
+
+    ``POST /v1/voices/design`` returns a ``preview_id`` (not a voice_id)
+    and a cached preview clip. We then ``POST /v1/voices/design/{id}/save``
+    to promote the preview into a permanent ``Voice`` row.
+    """
+    preview = client.post(
+        f"{url}/v1/voices/design",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "name": seed.name,
+            "description": seed.description,
+            "design_prompt": seed.design_prompt,
+        },
+        timeout=120,
+    )
+    preview.raise_for_status()
+    preview_id = preview.json()["preview_id"]
+
+    save = client.post(
+        f"{url}/v1/voices/design/{preview_id}/save",
+        headers={"Authorization": f"Bearer {token}"},
+        json={},
+        timeout=60,
+    )
+    save.raise_for_status()
+    return save.json()
 
 
 def main() -> int:
@@ -139,15 +218,32 @@ def main() -> int:
             print(f"error: cannot reach gateway at {args.gateway_url}: {e}", file=sys.stderr)
             return 3
 
-        for seed in SEEDS:
+        for seed in UPLOAD_SEEDS:
             if seed.name in existing:
-                print(f"[skip] {seed.name} already exists")
+                print(f"[skip] {seed.name} already exists (upload)")
                 continue
             mp3 = args.cache_dir / f"{seed.name}.mp3"
             download_once(seed.url, mp3)
             audio = slice_audio(mp3, seed.start_s, seed.duration_s)
             voice = upload(client, args.gateway_url, args.token, seed, audio)
             print(f"[ok]   {seed.name}  id={voice['id']}  duration_ms={voice['duration_ms']}")
+            existing.add(seed.name)
+
+        if args.skip_designed:
+            print("[info] --skip-designed set, leaving fable/onyx/shimmer unseeded")
+            return 0
+
+        for dseed in DESIGN_SEEDS:
+            if dseed.name in existing:
+                print(f"[skip] {dseed.name} already exists (designed)")
+                continue
+            t0 = time.time()
+            voice = design(client, args.gateway_url, args.token, dseed)
+            print(
+                f"[ok]   {dseed.name}  id={voice['id']}  "
+                f"source={voice.get('source')}  took={time.time() - t0:.1f}s"
+            )
+            existing.add(dseed.name)
     return 0
 
 
