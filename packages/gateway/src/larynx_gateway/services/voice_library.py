@@ -167,6 +167,9 @@ class VoiceLibrary:
                 f"a voice named {name!r} already exists",
                 status=409,
             ) from e
+        # Pull server-default columns (created_at / updated_at) back into the
+        # Python object so response serialisation doesn't trigger lazy IO.
+        await self._session.refresh(voice)
 
         log.info(
             "voice.uploaded",
@@ -356,6 +359,7 @@ class VoiceLibrary:
         # Annotate the voice with the design prompt for provenance.
         uploaded.voice.design_prompt = design_meta["design_prompt"]
         await self._session.commit()
+        await self._session.refresh(uploaded.voice)
 
         preview.delete()
         log.info("voice.design_saved", voice_id=uploaded.voice.id, preview_id=preview_id)

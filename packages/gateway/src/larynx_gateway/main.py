@@ -1,13 +1,17 @@
 """FastAPI app factory + lifespan.
 
-For M1 the gateway and VoxCPM2 worker share a Python process. The lifespan
-(a) initialises the DB engine, (b) loads the VoxCPM2 model (mock or real),
-(c) starts the in-process worker loop and the gateway-side client over a
-shared ``WorkerChannel``. Shutdown is symmetric.
+Gateway + VoxCPM2 worker share a Python process. Lifespan responsibilities:
+- initialise DB engine + Redis client
+- load the VoxCPM2 model (mock or real) via VoxCPMModelManager
+- start the in-process worker loop and the gateway-side client over a
+  shared WorkerChannel
+- construct the LatentCache (Redis + disk) and hand it to routes
+Shutdown is symmetric.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -19,7 +23,9 @@ from larynx_voxcpm_worker.server import WorkerServer
 from larynx_gateway.config import Settings, get_settings
 from larynx_gateway.db.session import dispose_engine, init_engine
 from larynx_gateway.logging import configure_logging
-from larynx_gateway.routes import health, tts
+from larynx_gateway.routes import health, tts, voices
+from larynx_gateway.services.latent_cache import LatentCache, build_redis_client
+from larynx_gateway.services.voice_files import resolve_data_dir
 from larynx_gateway.workers_client.base import WorkerChannel
 from larynx_gateway.workers_client.voxcpm_client import VoxCPMClient
 
@@ -30,16 +36,31 @@ log = structlog.get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
 
-    # DB. Creating the engine doesn't require the DB to be reachable; it only
-    # matters when the first session is opened, which happens in M2. For M1
-    # this means the gateway starts cleanly even if Postgres is down.
+    # DB. Engine creation is lazy about actually connecting; requests that
+    # need a session will fail if Postgres is down, but the gateway boots.
     init_engine(settings.database_url)
 
-    # VoxCPM worker + client (in-process).
-    import os
+    # Ensure data_dir exists before the worker/cache try to write into it.
+    data_dir = resolve_data_dir(settings.larynx_data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    app.state.data_dir = data_dir
 
+    # Redis + latent cache. Connection is lazy — if Redis isn't reachable
+    # the first request touching the cache will raise; the gateway itself
+    # still boots so /health + migrate workflows work.
+    redis_client = build_redis_client(settings.redis_url)
+    latent_cache = LatentCache(redis_client, data_dir, ttl_s=settings.larynx_latent_cache_ttl_s)
+    app.state.redis_client = redis_client
+    app.state.latent_cache = latent_cache
+    app.state.design_ttl_s = settings.larynx_voice_design_ttl_s
+
+    # VoxCPM worker + client (in-process).
     os.environ.setdefault("LARYNX_TTS_MODE", settings.larynx_tts_mode)
     os.environ.setdefault("LARYNX_VOXCPM_GPU", str(settings.larynx_voxcpm_gpu))
+    os.environ.setdefault("LARYNX_VOXCPM_MODEL", settings.larynx_voxcpm_model)
+    os.environ.setdefault(
+        "LARYNX_VOXCPM_INFERENCE_TIMESTEPS", str(settings.larynx_voxcpm_inference_timesteps)
+    )
 
     manager = await VoxCPMModelManager.from_env()
     channel = WorkerChannel()
@@ -59,6 +80,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         tts_mode=manager.mode.value,
         port=settings.larynx_port,
         db=_redact(settings.database_url),
+        redis=_redact(settings.redis_url),
+        data_dir=str(data_dir),
     )
 
     try:
@@ -67,6 +90,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.worker_ready = False
         await worker.stop()
         await client.stop()
+        try:
+            await redis_client.aclose()
+        except Exception:
+            pass
         await dispose_engine()
         log.info("gateway.shutdown_complete")
 
@@ -77,8 +104,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Larynx Gateway",
-        version="0.1.0",
-        description="Self-hosted voice AI platform — M1",
+        version="0.2.0",
+        description="Self-hosted voice AI platform — M2",
         lifespan=lifespan,
     )
     app.state.settings = settings
@@ -86,12 +113,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(tts.router)
+    app.include_router(voices.router)
 
     return app
 
 
 def _redact(url: str) -> str:
-    """Strip credentials before logging a DB URL."""
+    """Strip credentials before logging a DB/Redis URL."""
     if "@" not in url:
         return url
     scheme_rest = url.split("://", 1)
