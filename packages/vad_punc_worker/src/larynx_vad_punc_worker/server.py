@@ -1,9 +1,9 @@
 """VAD + Punctuation worker server loop.
 
-Handles ``DetectSegmentsRequest`` and ``PunctuateRequest``. Same
-structure as the VoxCPM + Fun-ASR workers so a single supervisord
-restart policy covers all three. CPU-bound, so we don't fight for GPU
-memory.
+Handles offline ``DetectSegmentsRequest`` / ``PunctuateRequest`` plus the
+streaming session messages (``VadStreamOpen`` / ``VadStreamFeed`` /
+``VadStreamClose``). Streaming sessions are keyed by ``session_id`` and
+stored on a :class:`StreamingVad` built from the loaded backend.
 """
 
 from __future__ import annotations
@@ -23,10 +23,17 @@ from larynx_shared.ipc.messages import (
     RequestMessage,
     ResponseMessage,
     Segment,
+    VadStreamCloseRequest,
+    VadStreamCloseResponse,
+    VadStreamFeedRequest,
+    VadStreamFeedResponse,
+    VadStreamOpenRequest,
+    VadStreamOpenResponse,
 )
 
 from larynx_vad_punc_worker.audio_utils import pcm_to_float32
 from larynx_vad_punc_worker.model_manager import VadPuncModelManager
+from larynx_vad_punc_worker.streaming_vad import StreamingVad, build_streaming_vad
 
 log = structlog.get_logger(__name__)
 
@@ -38,6 +45,10 @@ class WorkerServer:
         self._task: asyncio.Task[None] | None = None
         self._shutdown = asyncio.Event()
         self._inflight: set[asyncio.Task[None]] = set()
+        # Streaming VAD is constructed lazily on first Open so the manager
+        # mode is already final by then.
+        self._streaming_vad: StreamingVad | None = None
+        self._streaming_vad_lock = asyncio.Lock()
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -58,6 +69,15 @@ class WorkerServer:
         await self._manager.close()
         log.info("vad_punc_worker.stopped")
 
+    async def _get_streaming_vad(self) -> StreamingVad:
+        if self._streaming_vad is None:
+            async with self._streaming_vad_lock:
+                if self._streaming_vad is None:
+                    self._streaming_vad = build_streaming_vad(
+                        self._manager.mode.value, self._manager.backend
+                    )
+        return self._streaming_vad
+
     async def _serve(self) -> None:
         while not self._shutdown.is_set():
             try:
@@ -77,6 +97,12 @@ class WorkerServer:
             return await self._segment(msg)
         if isinstance(msg, PunctuateRequest):
             return await self._punctuate(msg)
+        if isinstance(msg, VadStreamOpenRequest):
+            return await self._vad_stream_open(msg)
+        if isinstance(msg, VadStreamFeedRequest):
+            return await self._vad_stream_feed(msg)
+        if isinstance(msg, VadStreamCloseRequest):
+            return await self._vad_stream_close(msg)
         return ErrorMessage(
             request_id=msg.request_id,
             code="unknown_kind",
@@ -132,6 +158,77 @@ class WorkerServer:
             log.exception("punc.punctuate_failed", request_id=req.request_id)
             return ErrorMessage(
                 request_id=req.request_id, code="punctuate_failed", message=str(e)
+            )
+
+    # -- streaming VAD -------------------------------------------------------
+
+    async def _vad_stream_open(self, req: VadStreamOpenRequest) -> ResponseMessage | ErrorMessage:
+        try:
+            vad = await self._get_streaming_vad()
+            await vad.open(
+                session_id=req.session_id,
+                sample_rate=req.sample_rate,
+                speech_end_silence_ms=req.speech_end_silence_ms,
+            )
+            log.info(
+                "vad.stream_open",
+                request_id=req.request_id,
+                session_id=req.session_id,
+                sample_rate=req.sample_rate,
+                speech_end_silence_ms=req.speech_end_silence_ms,
+            )
+            return VadStreamOpenResponse(
+                request_id=req.request_id,
+                session_id=req.session_id,
+                sample_rate=req.sample_rate,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.exception("vad.stream_open_failed", session_id=req.session_id)
+            return ErrorMessage(
+                request_id=req.request_id, code="vad_stream_open_failed", message=str(e)
+            )
+
+    async def _vad_stream_feed(self, req: VadStreamFeedRequest) -> ResponseMessage | ErrorMessage:
+        try:
+            vad = await self._get_streaming_vad()
+            events, state, session_ms = await vad.feed(
+                req.session_id, req.pcm_s16le, is_final=req.is_final
+            )
+            return VadStreamFeedResponse(
+                request_id=req.request_id,
+                session_id=req.session_id,
+                events=events,
+                vad_state=state,
+                session_ms=session_ms,
+            )
+        except KeyError as e:
+            return ErrorMessage(
+                request_id=req.request_id, code="unknown_session", message=str(e)
+            )
+        except Exception as e:  # noqa: BLE001
+            log.exception("vad.stream_feed_failed", session_id=req.session_id)
+            return ErrorMessage(
+                request_id=req.request_id, code="vad_stream_feed_failed", message=str(e)
+            )
+
+    async def _vad_stream_close(
+        self, req: VadStreamCloseRequest
+    ) -> ResponseMessage | ErrorMessage:
+        try:
+            vad = await self._get_streaming_vad()
+            await vad.close(req.session_id)
+            log.info(
+                "vad.stream_close",
+                request_id=req.request_id,
+                session_id=req.session_id,
+            )
+            return VadStreamCloseResponse(
+                request_id=req.request_id, session_id=req.session_id
+            )
+        except Exception as e:  # noqa: BLE001
+            log.exception("vad.stream_close_failed", session_id=req.session_id)
+            return ErrorMessage(
+                request_id=req.request_id, code="vad_stream_close_failed", message=str(e)
             )
 
 
