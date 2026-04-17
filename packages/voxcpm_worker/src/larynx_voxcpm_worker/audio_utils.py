@@ -1,8 +1,4 @@
-"""Audio helpers specific to the VoxCPM2 worker.
-
-M1 only needs float32 -> int16 packing; crossfade + resample helpers land in
-M4 for streaming TTS.
-"""
+"""Audio helpers specific to the VoxCPM2 worker."""
 
 from __future__ import annotations
 

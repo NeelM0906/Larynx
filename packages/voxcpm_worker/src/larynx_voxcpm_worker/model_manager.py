@@ -23,6 +23,7 @@ import math
 import os
 import struct
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -89,6 +90,28 @@ class VoxCPMBackend(ABC):
         temperature: float = 1.0,
         max_generate_length: int = 2000,
     ) -> NDArray[np.float32]: ...
+
+    @abstractmethod
+    def synthesize_stream(
+        self,
+        *,
+        text: str,
+        ref_audio_latents: bytes | None = None,
+        prompt_audio_latents: bytes | None = None,
+        prompt_text: str = "",
+        cfg_value: float = 2.0,
+        temperature: float = 1.0,
+        max_generate_length: int = 2000,
+    ) -> AsyncIterator[NDArray[np.float32]]:
+        """Async generator yielding chunks of float32 mono audio as they're
+        produced at the model's native output sample rate.
+
+        Callers (worker server) resample each chunk at emission time so the
+        WebSocket can begin flushing audio without waiting for the full
+        utterance. The final chunk is whatever the model produces last — no
+        explicit terminator is yielded; iteration just ends.
+        """
+        ...
 
     async def close(self) -> None:  # noqa: B027 — intentional no-op default
         """Release resources. Override in subclasses that hold GPU memory."""
@@ -197,6 +220,41 @@ class MockVoxCPMBackend(VoxCPMBackend):
             signal[-fade_samples:] *= ramp[::-1]
         return signal
 
+    async def synthesize_stream(
+        self,
+        *,
+        text: str,
+        ref_audio_latents: bytes | None = None,
+        prompt_audio_latents: bytes | None = None,
+        prompt_text: str = "",
+        cfg_value: float = 2.0,
+        temperature: float = 1.0,
+        max_generate_length: int = 2000,
+    ) -> AsyncIterator[NDArray[np.float32]]:
+        # Delegate to the one-shot path and slice the result into chunks so
+        # the streaming code path is exercised in mock mode. ~120ms chunks
+        # roughly match what nano-vllm-voxcpm emits in real mode.
+        import asyncio
+
+        full = await self.synthesize(
+            text=text,
+            ref_audio_latents=ref_audio_latents,
+            prompt_audio_latents=prompt_audio_latents,
+            prompt_text=prompt_text,
+            cfg_value=cfg_value,
+            temperature=temperature,
+            max_generate_length=max_generate_length,
+        )
+        chunk_samples = int(self._output_sr * 0.12)
+        if chunk_samples <= 0:
+            yield full
+            return
+        for start in range(0, len(full), chunk_samples):
+            yield full[start : start + chunk_samples]
+            # Yield to the loop so the worker can interleave cancels / other
+            # sessions; real backend awaits the GPU between chunks naturally.
+            await asyncio.sleep(0)
+
 
 # ---------------------------------------------------------------------------
 # Real backend — nano-vllm-voxcpm adapter
@@ -291,12 +349,37 @@ class VoxCPMBackendReal(VoxCPMBackend):
         temperature: float = 1.0,
         max_generate_length: int = 2000,
     ) -> NDArray[np.float32]:
+        chunks: list[NDArray[np.float32]] = []
+        async for chunk in self.synthesize_stream(
+            text=text,
+            ref_audio_latents=ref_audio_latents,
+            prompt_audio_latents=prompt_audio_latents,
+            prompt_text=prompt_text,
+            cfg_value=cfg_value,
+            temperature=temperature,
+            max_generate_length=max_generate_length,
+        ):
+            chunks.append(chunk)
+        if not chunks:
+            return np.zeros(0, dtype=np.float32)
+        return np.concatenate(chunks, axis=0)
+
+    async def synthesize_stream(
+        self,
+        *,
+        text: str,
+        ref_audio_latents: bytes | None = None,
+        prompt_audio_latents: bytes | None = None,
+        prompt_text: str = "",
+        cfg_value: float = 2.0,
+        temperature: float = 1.0,
+        max_generate_length: int = 2000,
+    ) -> AsyncIterator[NDArray[np.float32]]:
         if self._pool is None:
             raise RuntimeError("backend not loaded")
         if not text:
             raise ValueError("text must not be empty")
 
-        chunks: list[NDArray[np.float32]] = []
         async for chunk in self._pool.generate(
             target_text=text,
             prompt_latents=prompt_audio_latents,
@@ -307,11 +390,7 @@ class VoxCPMBackendReal(VoxCPMBackend):
             cfg_value=cfg_value,
             ref_audio_latents=ref_audio_latents,
         ):
-            arr = np.asarray(chunk, dtype=np.float32).reshape(-1)
-            chunks.append(arr)
-        if not chunks:
-            return np.zeros(0, dtype=np.float32)
-        return np.concatenate(chunks, axis=0)
+            yield np.asarray(chunk, dtype=np.float32).reshape(-1)
 
     async def close(self) -> None:
         pool = self._pool

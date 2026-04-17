@@ -6,6 +6,10 @@ model manager, pushes typed responses back on the worker->gateway queue.
 The backend is fully async (AsyncVoxCPM2ServerPool is native async), so the
 loop just `await`s backend methods directly — no thread offload. Output is
 resampled to the caller's target_sr at the edge via librosa.
+
+Streaming handlers push one or more chunk frames plus a terminal done frame
+for the same ``request_id``. The ``_inflight`` dict keys tasks by request_id
+so ``CancelStreamRequest`` can cancel a specific in-flight generation.
 """
 
 from __future__ import annotations
@@ -17,13 +21,17 @@ import time
 import structlog
 from larynx_shared.ipc.client_base import WorkerChannel
 from larynx_shared.ipc.messages import (
+    CancelStreamRequest,
     EncodeReferenceRequest,
     EncodeReferenceResponse,
     ErrorMessage,
     RequestMessage,
     ResponseMessage,
+    SynthesizeChunkFrame,
+    SynthesizeDoneFrame,
     SynthesizeRequest,
     SynthesizeResponse,
+    SynthesizeStreamRequest,
 )
 
 from larynx_voxcpm_worker.audio_utils import pcm_from_float
@@ -38,7 +46,9 @@ class WorkerServer:
         self._manager = manager
         self._task: asyncio.Task[None] | None = None
         self._shutdown = asyncio.Event()
-        self._inflight: set[asyncio.Task[None]] = set()
+        # Keyed by request_id so CancelStreamRequest can target a specific
+        # in-flight task. Tasks are kept alive here until they complete.
+        self._inflight: dict[str, asyncio.Task[None]] = {}
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -56,27 +66,36 @@ class WorkerServer:
             except (asyncio.CancelledError, Exception):
                 pass
             self._task = None
+        # Cancel any still-running per-request tasks.
+        for task in list(self._inflight.values()):
+            task.cancel()
+        if self._inflight:
+            await asyncio.gather(*self._inflight.values(), return_exceptions=True)
+        self._inflight.clear()
         await self._manager.close()
         log.info("voxcpm_worker.stopped")
 
     async def _serve(self) -> None:
-        """Dispatch requests concurrently while keeping strong task refs.
-
-        Without the _inflight set, asyncio.create_task()'d tasks can be
-        garbage-collected mid-run because the event loop holds only a weak
-        reference. The set keeps them alive; the done-callback removes
-        them once complete.
-        """
         while not self._shutdown.is_set():
             try:
                 msg = await self._channel.requests.get()
             except asyncio.CancelledError:
                 break
+            if isinstance(msg, CancelStreamRequest):
+                task = self._inflight.get(msg.target_request_id)
+                if task is not None and not task.done():
+                    task.cancel()
+                continue
             task = asyncio.create_task(self._dispatch(msg), name=f"req-{msg.request_id[:8]}")
-            self._inflight.add(task)
-            task.add_done_callback(self._inflight.discard)
+            self._inflight[msg.request_id] = task
+            task.add_done_callback(lambda t, rid=msg.request_id: self._inflight.pop(rid, None))
 
     async def _dispatch(self, msg: RequestMessage) -> None:
+        # Streaming requests write many frames themselves; request/response
+        # handlers return a single frame we enqueue here.
+        if isinstance(msg, SynthesizeStreamRequest):
+            await self._synthesize_stream(msg)
+            return
         response = await self._handle(msg)
         await self._channel.responses.put(response)
 
@@ -105,7 +124,6 @@ class WorkerServer:
                 max_generate_length=req.max_generate_length,
             )
             gen_ms = int((time.perf_counter() - t0) * 1000)
-            # Resample to the caller's requested output SR.
             samples = self._manager.resample(samples, info.output_sample_rate, req.sample_rate)
             pcm = pcm_from_float(samples)
             duration_ms = int(1000 * len(samples) / req.sample_rate) if len(samples) else 0
@@ -127,9 +145,91 @@ class WorkerServer:
             )
         except ValueError as e:
             return ErrorMessage(request_id=req.request_id, code="invalid_input", message=str(e))
-        except Exception as e:  # noqa: BLE001 — surface *any* backend failure
+        except Exception as e:  # noqa: BLE001
             log.exception("voxcpm.synthesize_failed", request_id=req.request_id)
             return ErrorMessage(request_id=req.request_id, code="synthesis_failed", message=str(e))
+
+    async def _synthesize_stream(self, req: SynthesizeStreamRequest) -> None:
+        """Stream chunks of audio; terminate with a done frame or an error.
+
+        Cancellation: if the gateway client cancels (e.g. WebSocket
+        disconnect), the outer ``_serve`` loop cancels our task via
+        ``CancelStreamRequest``. We swallow the CancelledError and let the
+        task end silently — the client queue has already been torn down.
+        """
+        t_start = time.perf_counter()
+        ttfb_ms: int | None = None
+        chunk_index = 0
+        total_samples = 0
+        try:
+            info = await self._manager.backend.get_info()
+            source_sr = info.output_sample_rate
+            if not req.text:
+                raise ValueError("text must not be empty")
+            async for chunk in self._manager.backend.synthesize_stream(
+                text=req.text,
+                ref_audio_latents=req.ref_audio_latents,
+                prompt_audio_latents=req.prompt_audio_latents,
+                prompt_text=req.prompt_text,
+                cfg_value=req.cfg_value,
+                temperature=req.temperature,
+                max_generate_length=req.max_generate_length,
+            ):
+                if chunk.size == 0:
+                    continue
+                resampled = self._manager.resample(chunk, source_sr, req.sample_rate)
+                pcm = pcm_from_float(resampled)
+                if ttfb_ms is None:
+                    ttfb_ms = int((time.perf_counter() - t_start) * 1000)
+                await self._channel.responses.put(
+                    SynthesizeChunkFrame(
+                        request_id=req.request_id,
+                        pcm_s16le=pcm,
+                        sample_rate=req.sample_rate,
+                        chunk_index=chunk_index,
+                    )
+                )
+                chunk_index += 1
+                total_samples += len(resampled)
+            duration_ms = (
+                int(1000 * total_samples / req.sample_rate) if total_samples else 0
+            )
+            log.info(
+                "voxcpm.synthesize_stream",
+                request_id=req.request_id,
+                chars=len(req.text),
+                chunks=chunk_index,
+                duration_ms=duration_ms,
+                ttfb_ms=ttfb_ms or 0,
+                total_ms=int((time.perf_counter() - t_start) * 1000),
+            )
+            await self._channel.responses.put(
+                SynthesizeDoneFrame(
+                    request_id=req.request_id,
+                    sample_rate=req.sample_rate,
+                    total_duration_ms=duration_ms,
+                    chunk_count=chunk_index,
+                    ttfb_ms=ttfb_ms or 0,
+                )
+            )
+        except asyncio.CancelledError:
+            log.info(
+                "voxcpm.synthesize_stream_cancelled",
+                request_id=req.request_id,
+                chunks_emitted=chunk_index,
+            )
+            raise
+        except ValueError as e:
+            await self._channel.responses.put(
+                ErrorMessage(request_id=req.request_id, code="invalid_input", message=str(e))
+            )
+        except Exception as e:  # noqa: BLE001
+            log.exception("voxcpm.synthesize_stream_failed", request_id=req.request_id)
+            await self._channel.responses.put(
+                ErrorMessage(
+                    request_id=req.request_id, code="synthesis_failed", message=str(e)
+                )
+            )
 
     async def _encode_reference(
         self, req: EncodeReferenceRequest
