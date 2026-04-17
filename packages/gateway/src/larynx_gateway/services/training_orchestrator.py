@@ -39,6 +39,7 @@ from larynx_training_worker.config_builder import (
 )
 from larynx_training_worker.dataset_prep import (
     auto_transcribe_if_missing,
+    normalise_manifest_paths,
     validate_dataset_phase_a,
     validate_transcripts_phase_b,
 )
@@ -163,6 +164,30 @@ async def run_job(
                     session,
                     job,
                     error_code="auto_transcribe_failed",
+                    error_detail=str(e),
+                )
+                return JobRunResult.FAILED
+
+        # Normalise every manifest ``audio`` path to absolute before
+        # training spawns — HF datasets resolves relative paths against
+        # cwd, not the manifest's directory, so a bare filename in the
+        # jsonl fails at training start with FileNotFoundError. The
+        # helper is idempotent; it's a no-op when everything is
+        # already absolute.
+        if dataset_paths.has_transcripts():
+            try:
+                rewritten = normalise_manifest_paths(dataset_paths)
+                if rewritten:
+                    log.info(
+                        "training.manifest_normalised",
+                        job_id=job_id,
+                        rows_rewritten=rewritten,
+                    )
+            except Exception as e:  # noqa: BLE001
+                await _fail(
+                    session,
+                    job,
+                    error_code="manifest_normalise_failed",
                     error_detail=str(e),
                 )
                 return JobRunResult.FAILED

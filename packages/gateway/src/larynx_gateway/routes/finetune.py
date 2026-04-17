@@ -326,9 +326,7 @@ async def create_job(
                     else _default_hook(_progress_observer),
                     load_lora_hook=load_lora_proxy,
                     transcribe_hook=transcribe_proxy,
-                    min_seconds=getattr(
-                        request.app.state, "training_min_seconds", 300
-                    ),
+                    min_seconds=getattr(request.app.state, "training_min_seconds", 300),
                 )
             finally:
                 registry.pop(job_id, None)

@@ -129,10 +129,7 @@ async def real_client(data_dir: pathlib.Path) -> AsyncIterator[AsyncClient]:
     # installing voxcpm into our main venv (preserves
     # ORCHESTRATION-M7.md §0).
     os.environ["LARYNX_VOXCPM_SRC_DIR"] = str(
-        pathlib.Path(__file__).resolve().parents[4]
-        / "third_party"
-        / "VoxCPM"
-        / "src"
+        pathlib.Path(__file__).resolve().parents[4] / "third_party" / "VoxCPM" / "src"
     )
     get_settings.cache_clear()
     app = create_app()
@@ -203,7 +200,12 @@ async def test_real_train_end_to_end(
                 "log_interval": 1,
                 "save_interval": 10,
                 "valid_interval": 10000,
-                "lora": {"r": 8, "alpha": 8},
+                # Rank MUST match the voxcpm_worker's init max_lora_rank
+                # (default 32). Installed nano-vllm-voxcpm 2.0.0's
+                # load_lora rejects a mismatch with a tensor-shape error
+                # rather than padding; keep them equal until upstream
+                # supports variable rank ≤ max.
+                "lora": {"r": 32, "alpha": 32},
             },
             "validate_transcripts": False,
         },

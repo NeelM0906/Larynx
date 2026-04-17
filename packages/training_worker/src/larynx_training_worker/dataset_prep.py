@@ -424,6 +424,54 @@ async def validate_transcripts_phase_b(
     return report
 
 
+def normalise_manifest_paths(dataset: DatasetPaths) -> int:
+    """Rewrite ``transcripts.jsonl`` so every ``audio`` entry is absolute.
+
+    HuggingFace ``datasets`` resolves relative audio paths against the
+    subprocess CWD — not against the manifest file's directory — so a
+    bare ``clip00.wav`` in the manifest fails with ``FileNotFoundError``
+    at training start. Rewriting to absolute paths at PREPARING time
+    is the simplest robust fix: no cwd trick required, and the
+    manifest remains readable on disk for debugging.
+
+    Idempotent: if every entry is already absolute, no file is
+    rewritten and 0 is returned. Otherwise returns the count of rows
+    that got rewritten.
+    """
+    if not dataset.has_transcripts():
+        return 0
+    rows: list[dict[str, object]] = []
+    rewritten = 0
+    with dataset.transcripts_jsonl.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                rows.append({"__raw__": line})
+                continue
+            audio = row.get("audio")
+            if isinstance(audio, str):
+                resolved = _resolve_manifest_audio(dataset, audio)
+                if str(resolved) != audio:
+                    row["audio"] = str(resolved)
+                    rewritten += 1
+            rows.append(row)
+    if rewritten == 0:
+        return 0
+    tmp = dataset.transcripts_jsonl.with_suffix(".jsonl.tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            if "__raw__" in row:
+                fh.write(str(row["__raw__"]) + "\n")
+                continue
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    tmp.replace(dataset.transcripts_jsonl)
+    return rewritten
+
+
 async def auto_transcribe_if_missing(
     dataset: DatasetPaths,
     *,

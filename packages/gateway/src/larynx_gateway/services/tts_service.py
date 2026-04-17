@@ -32,6 +32,12 @@ class ResolvedConditioning:
     ref_audio_latents: bytes | None = None
     prompt_audio_latents: bytes | None = None
     prompt_text: str = ""
+    # LoRA voices (``Voice.source == 'lora'``) condition via a
+    # name-keyed adapter on the voxcpm_worker, not via latents. When
+    # this is set, ``ref_audio_latents`` / ``prompt_audio_latents``
+    # are left at None and the synthesis call threads ``lora_name``
+    # through to the worker.
+    lora_name: str | None = None
 
 
 async def resolve_conditioning(
@@ -57,12 +63,18 @@ async def resolve_conditioning(
         raise ValueError("voice_id and reference_audio are mutually exclusive")
 
     if req.voice_id is not None:
+        # LoRA voices don't have latents — they condition via a
+        # worker-side adapter keyed by voice_id (ORCHESTRATION-M7.md
+        # §3). Look up the Voice first so we can branch cleanly.
+        voice = await library.get(req.voice_id)
+        if voice is None:
+            return None
+        if voice.source == "lora":
+            return ResolvedConditioning(lora_name=voice.id)
+
         latents = await library.get_latents_for_synthesis(req.voice_id)
         if latents is None:
             return None  # signals 404
-        # Voice may carry a prompt_text for ultimate-cloning mode.
-        voice = await library.get(req.voice_id)
-        assert voice is not None  # get_latents_for_synthesis already checked
         if voice.prompt_text:
             return ResolvedConditioning(
                 ref_audio_latents=latents,
@@ -102,6 +114,7 @@ async def synthesize(
         prompt_text=conditioning.prompt_text,
         cfg_value=req.cfg_value,
         temperature=req.temperature,
+        lora_name=conditioning.lora_name,
     )
     gen_ms = int((time.perf_counter() - t0) * 1000)
 

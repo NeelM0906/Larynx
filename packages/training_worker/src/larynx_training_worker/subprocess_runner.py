@@ -129,9 +129,7 @@ async def run_training_subprocess(
     voxcpm_src = env.get("LARYNX_VOXCPM_SRC_DIR")
     if voxcpm_src and pathlib.Path(voxcpm_src).is_dir():
         existing = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = (
-            f"{voxcpm_src}:{existing}" if existing else voxcpm_src
-        )
+        env["PYTHONPATH"] = f"{voxcpm_src}:{existing}" if existing else voxcpm_src
 
     if extra_env:
         env.update(extra_env)
