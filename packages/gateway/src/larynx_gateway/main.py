@@ -41,11 +41,13 @@ from larynx_gateway.routes import (
     tts_stream,
     voices,
 )
+from larynx_gateway.services.batch_queue import BatchQueue
 from larynx_gateway.services.boot_reconcile import load_lora_voices, reap_orphan_jobs
 from larynx_gateway.services.latent_cache import LatentCache, build_redis_client
 from larynx_gateway.services.llm_client import LLMClient
 from larynx_gateway.services.training_logs import TrainingLogStore
 from larynx_gateway.services.voice_files import resolve_data_dir
+from larynx_gateway.workers.batch_worker import BatchWorkerDeps, run_consumer
 from larynx_gateway.workers_client.base import WorkerChannel
 from larynx_gateway.workers_client.funasr_client import FunASRClient
 from larynx_gateway.workers_client.vad_punc_client import VadPuncClient
@@ -164,6 +166,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.llm_client = llm_client
     app.state.llm_default_model = settings.larynx_llm_default_model
 
+    # M8 batch queue + consumer tasks. Start AFTER voxcpm_client is
+    # ready because consumers call through the shared client. Two
+    # consumers, bounded per ORCHESTRATION-M8.md §0 so real-time TTS
+    # never starves.
+    batch_queue = BatchQueue(redis_client)
+    batch_shutdown = asyncio.Event()
+    app.state.batch_queue = batch_queue
+    app.state.batch_shutdown_event = batch_shutdown
+    if settings.larynx_batch_enabled:
+        deps = BatchWorkerDeps(
+            queue=batch_queue,
+            voxcpm=client,
+            data_dir=data_dir,
+            shutdown_event=batch_shutdown,
+        )
+        app.state.batch_consumers = [
+            asyncio.create_task(
+                run_consumer(deps, i, latent_cache, settings.larynx_voice_design_ttl_s),
+                name=f"batch-consumer-{i}",
+            )
+            for i in range(settings.larynx_batch_consumers)
+        ]
+    else:
+        app.state.batch_consumers = []
+
     app.state.worker_ready = True
 
     log.info(
@@ -181,6 +208,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         app.state.worker_ready = False
+        # Signal batch consumers first + give them a bounded grace
+        # period to drain the current item before we tear down the
+        # voxcpm_client they depend on. 30s cap per PRD §7.
+        batch_shutdown.set()
+        consumers = getattr(app.state, "batch_consumers", [])
+        if consumers:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*consumers, return_exceptions=True), timeout=30
+                )
+            except TimeoutError:
+                log.warning("batch.consumers_drain_timeout")
+                for t in consumers:
+                    t.cancel()
         await worker.stop()
         await client.stop()
         await funasr_worker.stop()
