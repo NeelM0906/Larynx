@@ -1144,12 +1144,20 @@ wheels = [
 [[package]]
 name = "flash-attn"
 version = "2.8.3"
-source = { registry = "https://pypi.org/simple" }
+source = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
 dependencies = [
+    { name = "einops", marker = "python_full_version == '3.12.*'" },
+    { name = "torch", marker = "python_full_version == '3.12.*'" },
+]
+wheels = [
+    { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl", hash = "sha256:4e2f9e39313266b1544b68138b15b91ee6221eccf14f7902b7c6620351340810" },
+]
+
+[package.metadata]
+requires-dist = [
     { name = "einops" },
     { name = "torch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3b/b2/8d76c41ad7974ee264754709c22963447f7f8134613fd9ce80984ed0dab7/flash_attn-2.8.3.tar.gz", hash = "sha256:1e71dd64a9e0280e0447b8a0c2541bad4bf6ac65bdeaa2f90e51a9e57de0370d", size = 8447812, upload-time = "2025-08-15T08:28:12.911Z" }
 
 [[package]]
 name = "flashinfer-python"
@@ -1842,7 +1850,7 @@ dependencies = [
 
 [package.optional-dependencies]
 gpu = [
-    { name = "flash-attn" },
+    { name = "flash-attn", marker = "python_full_version == '3.12.*'" },
     { name = "funasr" },
     { name = "nano-vllm-voxcpm" },
     { name = "torch" },
@@ -1863,7 +1871,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "flash-attn", marker = "extra == 'gpu'", specifier = "==2.8.3" },
+    { name = "flash-attn", marker = "extra == 'gpu'", url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" },
     { name = "funasr", marker = "extra == 'gpu'", specifier = ">=1.3.0" },
     { name = "larynx-funasr-worker", editable = "packages/funasr_worker" },
     { name = "larynx-gateway", editable = "packages/gateway" },
@@ -1903,7 +1911,7 @@ dependencies = [
 
 [package.optional-dependencies]
 gpu = [
-    { name = "flash-attn" },
+    { name = "flash-attn", marker = "python_full_version == '3.12.*'" },
     { name = "funasr" },
     { name = "torch" },
     { name = "torchaudio" },
@@ -1913,7 +1921,7 @@ gpu = [
 
 [package.metadata]
 requires-dist = [
-    { name = "flash-attn", marker = "extra == 'gpu'", specifier = "==2.8.3" },
+    { name = "flash-attn", marker = "extra == 'gpu'", url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" },
     { name = "funasr", marker = "extra == 'gpu'", specifier = ">=1.3.0" },
     { name = "larynx-shared", editable = "packages/shared" },
     { name = "librosa", specifier = ">=0.10" },
@@ -2048,14 +2056,14 @@ dependencies = [
 
 [package.optional-dependencies]
 gpu = [
-    { name = "flash-attn" },
+    { name = "flash-attn", marker = "python_full_version == '3.12.*'" },
     { name = "nano-vllm-voxcpm" },
     { name = "torch" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "flash-attn", marker = "extra == 'gpu'", specifier = "==2.8.3" },
+    { name = "flash-attn", marker = "extra == 'gpu'", url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" },
     { name = "larynx-shared", editable = "packages/shared" },
     { name = "librosa", specifier = ">=0.10" },
     { name = "nano-vllm-voxcpm", marker = "extra == 'gpu'", specifier = "==2.0.0" },
@@ -2643,7 +2651,7 @@ name = "nano-vllm-voxcpm"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "flash-attn" },
+    { name = "flash-attn", marker = "python_full_version == '3.12.*'" },
     { name = "librosa" },
     { name = "numpy" },
     { name = "pydantic" },

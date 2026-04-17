@@ -23,6 +23,12 @@ gpu = [
     # wheels from when 2.9/cu128 was stable — see scripts/m0 notes.
     "torch>=2.9,<2.10",
     "torchaudio>=2.9,<2.10",
+    # flash-attn MUST come from the Dao-AILab prebuilt wheel, not PyPI
+    # sdist. The PyPI release ships source only; building from source on
+    # this host picks up the system cu13 nvcc and produces a binary that
+    # demands libcudart.so.13 — incompatible with torch 2.9's bundled
+    # cu12 runtime. The URL pin below (in [tool.uv.sources]) overrides
+    # the PyPI source resolution so the wheel is fetched verbatim.
     "flash-attn==2.8.3",
     "vllm==0.13.0",
     "funasr>=1.3.0",
@@ -48,6 +54,12 @@ larynx-voxcpm-worker = { workspace = true }
 larynx-funasr-worker = { workspace = true }
 larynx-vad-punc-worker = { workspace = true }
 larynx-training-worker = { workspace = true }
+# Prebuilt flash-attn wheel matching torch 2.9 + cu12 + Python 3.12
+# + cxx11 ABI=True. Forces uv to fetch this instead of building the
+# PyPI sdist from source (which on a cu13 host links against
+# libcudart.so.13 and fails at import time). See the comment in the
+# [gpu] extra above for the full story.
+flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
 
 [dependency-groups]
 dev = [
