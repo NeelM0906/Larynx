@@ -73,6 +73,37 @@ class Heartbeat(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Streaming protocol primitives
+#
+# A streaming RPC is: one ``RequestMessage`` → many responses that share the
+# request's ``request_id``. Each intermediate response is a ``StreamChunk``
+# subclass; the terminal frame is a ``StreamEnd`` subclass. An ``ErrorMessage``
+# also terminates the stream. ``CancelStreamRequest`` is sent gateway → worker
+# when the consumer abandons the stream.
+# ---------------------------------------------------------------------------
+
+
+class StreamChunk(ResponseMessage):
+    """Marker base for intermediate frames of a streaming RPC."""
+
+
+class StreamEnd(ResponseMessage):
+    """Marker base for the terminal frame of a streaming RPC."""
+
+
+class CancelStreamRequest(RequestMessage):
+    """Ask the worker to stop producing chunks for a specific in-flight request.
+
+    The worker looks up the task by ``target_request_id`` and cancels it.
+    It's a best-effort hint — if the worker has already emitted ``StreamEnd``
+    the cancel is a no-op.
+    """
+
+    kind: Literal["cancel_stream"] = "cancel_stream"
+    target_request_id: str
+
+
+# ---------------------------------------------------------------------------
 # TTS — synthesize
 # ---------------------------------------------------------------------------
 
@@ -127,6 +158,75 @@ class SynthesizeResponse(ResponseMessage):
     @field_serializer("pcm_s16le", when_used="json")
     def _ser_pcm(self, v: bytes) -> str:
         return base64.b64encode(v).decode("ascii")
+
+
+# ---------------------------------------------------------------------------
+# TTS — streaming synthesis (WS /v1/tts/stream)
+#
+# SynthesizeStreamRequest has the same conditioning fields as SynthesizeRequest
+# but the worker emits multiple ``SynthesizeChunkFrame`` messages followed by
+# a ``SynthesizeDoneFrame``. The frames share ``request_id`` with the request
+# so the client dispatcher routes them to the stream queue.
+# ---------------------------------------------------------------------------
+
+
+class SynthesizeStreamRequest(RequestMessage):
+    kind: Literal["synthesize_stream"] = "synthesize_stream"
+    text: str
+    sample_rate: int = 24000
+    voice_id: str | None = None
+    ref_audio_latents: bytes | None = None
+    prompt_audio_latents: bytes | None = None
+    prompt_text: str = ""
+    cfg_value: float = 2.0
+    temperature: float = 1.0
+    max_generate_length: int = 2000
+    # Crossfade window applied between emitted chunks (gateway-side). The
+    # worker doesn't crossfade itself — it forwards the raw chunks it receives
+    # from VoxCPM so callers that want joint-chunk audio (e.g. batch jobs
+    # reassembling to WAV) can do their own smoothing.
+    crossfade_ms: float = 10.0
+
+    @field_validator("ref_audio_latents", "prompt_audio_latents", mode="before")
+    @classmethod
+    def _decode_latents(cls, v: object) -> bytes | None:
+        return _coerce_bytes(v)
+
+    @field_serializer("ref_audio_latents", "prompt_audio_latents", when_used="json")
+    def _ser_latents(self, v: bytes | None) -> str | None:
+        return base64.b64encode(v).decode("ascii") if v is not None else None
+
+
+class SynthesizeChunkFrame(StreamChunk):
+    kind: Literal["synthesize_chunk"] = "synthesize_chunk"
+    pcm_s16le: bytes
+    sample_rate: int
+    # Zero-based index within this stream; handy for logging + ordering
+    # invariants in tests (chunks should arrive monotonically).
+    chunk_index: int
+
+    @field_validator("pcm_s16le", mode="before")
+    @classmethod
+    def _decode_pcm(cls, v: object) -> bytes:
+        out = _coerce_bytes(v)
+        if out is None:
+            raise ValueError("pcm_s16le must not be null")
+        return out
+
+    @field_serializer("pcm_s16le", when_used="json")
+    def _ser_pcm(self, v: bytes) -> str:
+        return base64.b64encode(v).decode("ascii")
+
+
+class SynthesizeDoneFrame(StreamEnd):
+    kind: Literal["synthesize_done"] = "synthesize_done"
+    sample_rate: int
+    total_duration_ms: int
+    chunk_count: int
+    # Worker-measured time-to-first-chunk (GPU-side). The gateway measures
+    # its own TTFB (from WS connect → first binary frame); both numbers are
+    # useful — they let us attribute latency to GPU vs IPC/WS path.
+    ttfb_ms: int
 
 
 # ---------------------------------------------------------------------------
@@ -316,3 +416,79 @@ class PunctuateResponse(ResponseMessage):
     # language was outside ct-punc's supported set — Fun-ASR's itn=True
     # output is already punctuated in-line for MLT languages).
     applied: bool
+
+
+# ---------------------------------------------------------------------------
+# Streaming VAD segmentation (WS /v1/stt/stream feeds this)
+#
+# Each streaming STT session opens a VAD session, feeds 20ms PCM frames, and
+# closes it when the WebSocket closes. Every Feed returns the list of
+# VAD events produced by incorporating those new samples; the gateway emits
+# speech_start / speech_end to the WS client as those fire. Heartbeats are
+# synthesised on the gateway from a timer — the VAD worker itself only needs
+# to report state changes.
+# ---------------------------------------------------------------------------
+
+
+VadStreamEventType = Literal["speech_start", "speech_end"]
+
+
+class VadStreamEvent(BaseModel):
+    event: VadStreamEventType
+    vad_state: Literal["speaking", "silent"]
+    # Offset in milliseconds from session open to the sample that triggered
+    # this event. Gateway uses it to slice audio buffer.
+    session_ms: int
+
+
+class VadStreamOpenRequest(RequestMessage):
+    kind: Literal["vad_stream_open"] = "vad_stream_open"
+    session_id: str
+    sample_rate: int = 16000
+    # Silence window (ms) after which a speech segment is considered closed.
+    # FSMN-VAD's own endpoint detector uses something similar; this value
+    # lets the gateway tune for interactivity vs. false triggers.
+    speech_end_silence_ms: int = 300
+
+
+class VadStreamOpenResponse(ResponseMessage):
+    kind: Literal["vad_stream_open"] = "vad_stream_open"
+    session_id: str
+    sample_rate: int
+
+
+class VadStreamFeedRequest(RequestMessage):
+    kind: Literal["vad_stream_feed"] = "vad_stream_feed"
+    session_id: str
+    pcm_s16le: bytes
+    is_final: bool = False
+
+    @field_validator("pcm_s16le", mode="before")
+    @classmethod
+    def _decode_pcm(cls, v: object) -> bytes:
+        out = _coerce_bytes(v)
+        if out is None:
+            raise ValueError("pcm_s16le must not be null")
+        return out
+
+    @field_serializer("pcm_s16le", when_used="json")
+    def _ser_pcm(self, v: bytes) -> str:
+        return base64.b64encode(v).decode("ascii")
+
+
+class VadStreamFeedResponse(ResponseMessage):
+    kind: Literal["vad_stream_feed"] = "vad_stream_feed"
+    session_id: str
+    events: list[VadStreamEvent] = Field(default_factory=list)
+    vad_state: Literal["speaking", "silent"]
+    session_ms: int
+
+
+class VadStreamCloseRequest(RequestMessage):
+    kind: Literal["vad_stream_close"] = "vad_stream_close"
+    session_id: str
+
+
+class VadStreamCloseResponse(ResponseMessage):
+    kind: Literal["vad_stream_close"] = "vad_stream_close"
+    session_id: str
