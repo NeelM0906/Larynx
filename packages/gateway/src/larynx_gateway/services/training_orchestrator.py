@@ -95,6 +95,7 @@ async def run_job(
     subprocess_hook: SubprocessHook | None = None,
     load_lora_hook: LoadLoraHook | None = None,
     transcribe_hook: TranscribeHook | None = None,
+    min_seconds: int = 300,
     wall_timeout_seconds: int = 86_400,
     cancel_grace_seconds: int = 30,
 ) -> JobRunResult:
@@ -134,7 +135,7 @@ async def run_job(
         # ------------------------------------------------------------
         await _transition(session, job, state="PREPARING", started_at=_utcnow())
 
-        phase_a = validate_dataset_phase_a(dataset_paths)
+        phase_a = validate_dataset_phase_a(dataset_paths, min_seconds=min_seconds)
         if not phase_a.ok:
             detail = "; ".join(i.detail for i in phase_a.issues[:5])
             await _fail(

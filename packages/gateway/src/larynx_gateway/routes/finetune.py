@@ -105,6 +105,7 @@ def _safe_filename(raw: str) -> str:
 )
 async def upload_dataset(
     files: list[UploadFile],
+    request: Request,
     data_dir: pathlib.Path = Depends(get_data_dir),
 ) -> DatasetUploadResponse:
     """Multipart upload of audio + optional ``transcripts.jsonl``.
@@ -159,7 +160,8 @@ async def upload_dataset(
     # Phase A runs against the staging dir — it takes a DatasetPaths so
     # we build one pointing at the staging layout.
     staging_dataset = _DatasetPathsView(data_dir=data_dir, dataset_id=dataset_id, staging=True)
-    report = validate_dataset_phase_a(staging_dataset)
+    min_seconds = getattr(request.app.state, "training_min_seconds", 300)
+    report = validate_dataset_phase_a(staging_dataset, min_seconds=min_seconds)
     if not report.ok:
         shutil.rmtree(staging, ignore_errors=True)
         raise HTTPException(
@@ -324,6 +326,9 @@ async def create_job(
                     else _default_hook(_progress_observer),
                     load_lora_hook=load_lora_proxy,
                     transcribe_hook=transcribe_proxy,
+                    min_seconds=getattr(
+                        request.app.state, "training_min_seconds", 300
+                    ),
                 )
             finally:
                 registry.pop(job_id, None)

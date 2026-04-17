@@ -82,6 +82,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.training_log_store = TrainingLogStore(redis_client)
     app.state.gpu_train_lock = asyncio.Lock()
     app.state.ft_jobs = {}
+    app.state.training_min_seconds = settings.larynx_ft_min_seconds
 
     # VoxCPM worker + client (in-process).
     os.environ.setdefault("LARYNX_TTS_MODE", settings.larynx_tts_mode)

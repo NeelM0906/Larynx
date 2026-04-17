@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # previous gateway process and gets marked FAILED(gateway_restarted).
     larynx_ft_orphan_grace_seconds: int = 60
 
+    # Default minimum cumulative audio duration for fine-tuning Phase A
+    # (ORCHESTRATION-M7.md §2.1, §10). Lowering for the real_train
+    # smoke test is the only reason to deviate.
+    larynx_ft_min_seconds: int = 300
+
     # Logging
     larynx_log_level: str = "INFO"
     larynx_log_json: bool = True
