@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from larynx_gateway.db.models import Voice
+from larynx_gateway.db.models import Voice, VoiceSource
 from larynx_gateway.services.latent_cache import LatentCache, LatentMetadata
 from larynx_gateway.services.voice_files import DesignPreviewFiles, VoiceFiles
 from larynx_gateway.workers_client.voxcpm_client import VoxCPMClient
@@ -98,7 +98,7 @@ class VoiceLibrary:
         audio: bytes,
         wav_format: str = "wav",
         prompt_text: str | None = None,
-        source: str = "uploaded",
+        source: VoiceSource = "uploaded",
     ) -> UploadedVoice:
         if not audio:
             raise VoiceLibraryError("empty_audio", "reference audio must not be empty")

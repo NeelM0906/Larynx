@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from sqlalchemy import DateTime, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+# Application-level enum. Kept as ``typing.Literal`` (not SQL ENUM) so the
+# migration story stays simple — the DB column is plain VARCHAR(32) and a
+# new variant (e.g. M7's ``'lora'``) lands without an ALTER TYPE.
+VoiceSource = Literal["uploaded", "designed", "seed", "lora"]
 
 
 class Base(DeclarativeBase):
@@ -22,7 +29,7 @@ class Voice(Base):
     - ``prompt_text``: set when the voice was created with the "ultimate
       cloning" mode (transcript of the reference audio).
     - ``design_prompt``: set for voices created via POST /v1/voices/design.
-    - ``source``: 'uploaded' | 'designed' | 'seed' — distinguishes provenance.
+    - ``source``: see :data:`VoiceSource` — distinguishes provenance.
     """
 
     __tablename__ = "voices"
@@ -30,7 +37,7 @@ class Voice(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
     description: Mapped[str | None] = mapped_column(Text(), nullable=True)
-    source: Mapped[str] = mapped_column(String(32), nullable=False, default="uploaded")
+    source: Mapped[VoiceSource] = mapped_column(String(32), nullable=False, default="uploaded")
 
     ref_audio_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     latent_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
