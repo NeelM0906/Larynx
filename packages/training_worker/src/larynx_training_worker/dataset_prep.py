@@ -226,11 +226,7 @@ def _validate_transcripts(
                     )
                 )
                 # fall through so we still record the pairing
-            candidate = pathlib.Path(audio)
-            if not candidate.is_absolute():
-                candidate = (dataset.base_dir / candidate).resolve()
-            else:
-                candidate = candidate.resolve()
+            candidate = _resolve_manifest_audio(dataset, audio)
             manifest_paths.add(candidate)
             if candidate not in audio_set:
                 issues.append(
@@ -253,3 +249,26 @@ def _validate_transcripts(
         )
 
     return issues
+
+
+def _resolve_manifest_audio(dataset: DatasetPaths, audio: str) -> pathlib.Path:
+    """Resolve a manifest ``audio`` value to an absolute path.
+
+    Absolute paths are used as-is. Relative paths are tried in two
+    locations, in order: ``audio_dir`` (the convention our upload flow
+    produces) and ``base_dir`` (the convention the upstream example
+    manifest uses, where entries are relative to the project root).
+    Whichever exists wins; if neither does, ``audio_dir / audio`` is
+    returned so the missing-file error message points at a plausible
+    location.
+    """
+    candidate = pathlib.Path(audio)
+    if candidate.is_absolute():
+        return candidate.resolve()
+    under_audio = (dataset.audio_dir / candidate).resolve()
+    if under_audio.is_file():
+        return under_audio
+    under_base = (dataset.base_dir / candidate).resolve()
+    if under_base.is_file():
+        return under_base
+    return under_audio

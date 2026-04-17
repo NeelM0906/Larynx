@@ -31,6 +31,7 @@ from larynx_gateway.db.session import dispose_engine, get_session, init_engine
 from larynx_gateway.logging import configure_logging
 from larynx_gateway.routes import (
     conversation,
+    finetune,
     health,
     stt,
     stt_stream,
@@ -203,6 +204,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(stt.router)
     app.include_router(stt_stream.router)
     app.include_router(conversation.router)
+    app.include_router(finetune.router)
     from larynx_gateway.routes import openai_compat
 
     app.include_router(openai_compat.router)
