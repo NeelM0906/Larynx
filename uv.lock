@@ -14,6 +14,7 @@ members = [
     "larynx-funasr-worker",
     "larynx-gateway",
     "larynx-shared",
+    "larynx-training-worker",
     "larynx-vad-punc-worker",
     "larynx-voxcpm-worker",
 ]
@@ -1834,6 +1835,7 @@ dependencies = [
     { name = "larynx-funasr-worker" },
     { name = "larynx-gateway" },
     { name = "larynx-shared" },
+    { name = "larynx-training-worker" },
     { name = "larynx-vad-punc-worker" },
     { name = "larynx-voxcpm-worker" },
 ]
@@ -1866,6 +1868,7 @@ requires-dist = [
     { name = "larynx-funasr-worker", editable = "packages/funasr_worker" },
     { name = "larynx-gateway", editable = "packages/gateway" },
     { name = "larynx-shared", editable = "packages/shared" },
+    { name = "larynx-training-worker", editable = "packages/training_worker" },
     { name = "larynx-vad-punc-worker", editable = "packages/vad_punc_worker" },
     { name = "larynx-voxcpm-worker", editable = "packages/voxcpm_worker" },
     { name = "nano-vllm-voxcpm", marker = "extra == 'gpu'", specifier = "==2.0.0" },
@@ -1976,6 +1979,27 @@ dependencies = [
 requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pydantic", specifier = ">=2.7" },
+]
+
+[[package]]
+name = "larynx-training-worker"
+version = "0.1.0"
+source = { editable = "packages/training_worker" }
+dependencies = [
+    { name = "larynx-shared" },
+    { name = "pyyaml" },
+    { name = "redis" },
+    { name = "soundfile" },
+    { name = "structlog" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "larynx-shared", editable = "packages/shared" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "redis", specifier = ">=5.0" },
+    { name = "soundfile", specifier = ">=0.12" },
+    { name = "structlog", specifier = ">=24.1" },
 ]
 
 [[package]]

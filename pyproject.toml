@@ -8,6 +8,7 @@ dependencies = [
     "larynx-voxcpm-worker",
     "larynx-funasr-worker",
     "larynx-vad-punc-worker",
+    "larynx-training-worker",
     "larynx-gateway",
 ]
 
@@ -29,14 +30,14 @@ gpu = [
 ]
 
 [tool.uv.workspace]
-# Add new workers here as they're built: M7 -> training_worker. The spec
-# says `packages/*` in REPO_STRUCTURE.md; we list members explicitly so a
-# just-created directory with no pyproject.toml doesn't break `uv sync`.
+# REPO_STRUCTURE.md enumerates packages/* explicitly; the workspace list
+# below mirrors that. training_worker joined in M7.
 members = [
     "packages/shared",
     "packages/voxcpm_worker",
     "packages/funasr_worker",
     "packages/vad_punc_worker",
+    "packages/training_worker",
     "packages/gateway",
 ]
 
@@ -46,6 +47,7 @@ larynx-gateway = { workspace = true }
 larynx-voxcpm-worker = { workspace = true }
 larynx-funasr-worker = { workspace = true }
 larynx-vad-punc-worker = { workspace = true }
+larynx-training-worker = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -79,12 +81,18 @@ testpaths = [
     "packages/voxcpm_worker/tests",
     "packages/funasr_worker/tests",
     "packages/vad_punc_worker/tests",
+    "packages/training_worker/tests",
     "packages/shared/tests",
 ]
 # Tests that require loading the actual VoxCPM2 / Fun-ASR models on GPU.
 # Opt-in via `RUN_REAL_MODEL=1 uv run pytest -m real_model`. Default
 # `pytest` run excludes them so the mock suite stays fast.
+#
+# ``real_train`` gates the M7 end-to-end LoRA-training test (launches
+# the actual upstream training script; takes GPU time). Opt-in via
+# ``RUN_REAL_TRAIN=1``. See ORCHESTRATION-M7.md §7.
 markers = [
     "real_model: requires the real VoxCPM2 / Fun-ASR model on GPU (opt-in via RUN_REAL_MODEL=1)",
+    "real_train: requires a real LoRA training run on GPU (opt-in via RUN_REAL_TRAIN=1)",
 ]
-addopts = "-m 'not real_model'"
+addopts = "-m 'not real_model and not real_train'"
