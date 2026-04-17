@@ -35,16 +35,17 @@ from numpy.typing import NDArray
 log = structlog.get_logger(__name__)
 
 
-# VoxCPM2 operates at 24 kHz end-to-end (both encoder in and decoder out).
-# We expose the actual values via get_model_info() at load time; the mock
-# backend mirrors them so callers don't branch on mode.
-DEFAULT_ENCODER_SR = 24000
-DEFAULT_OUTPUT_SR = 24000
+# Values read out of a loaded VoxCPM2 via get_model_info(); the mock
+# backend mirrors them so callers don't branch on mode. The encoder takes
+# 16 kHz audio and the decoder emits 48 kHz; we expose these explicitly
+# so the gateway can decide where to resample.
+DEFAULT_ENCODER_SR = 16000
+DEFAULT_OUTPUT_SR = 48000
 
-# Each latent row is float32 × feat_dim; VoxCPM2 uses feat_dim=64 (confirmed
-# by reading VoxCPM2Engine.feat_dim at load time). The mock backend emits
-# the same shape so cache layers can't tell the difference.
+# Each latent row is float32 × feat_dim; VoxCPM2 uses feat_dim=64. The
+# engine requires num_frames % patch_size == 0 with patch_size=4.
 MOCK_FEAT_DIM = 64
+MOCK_PATCH_SIZE = 4
 
 
 class ModelMode(StrEnum):
@@ -151,9 +152,9 @@ class MockVoxCPMBackend(VoxCPMBackend):
         num_frames = max(32, len(samples) // (self._encoder_sr // 25))
         latents = rng.standard_normal((num_frames, self._feat_dim)).astype(np.float32) * 0.1
         # Patch size alignment — VoxCPM2 requires (num_frames % patch_size == 0).
-        # We use patch_size=2, so round up.
-        if num_frames % 2:
-            latents = np.concatenate([latents, latents[-1:]], axis=0)
+        pad = (-num_frames) % MOCK_PATCH_SIZE
+        if pad:
+            latents = np.concatenate([latents, np.tile(latents[-1:], (pad, 1))], axis=0)
         return latents.tobytes()
 
     async def synthesize(

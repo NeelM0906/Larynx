@@ -65,8 +65,8 @@ async def test_mock_mode_is_mock() -> None:
     be = MockVoxCPMBackend()
     assert be.mode is ModelMode.MOCK
     info = await be.get_info()
-    assert info.encoder_sample_rate == 24000
-    assert info.output_sample_rate == 24000
+    assert info.encoder_sample_rate == 16000
+    assert info.output_sample_rate == 48000
     assert info.feat_dim == 64
 
 

@@ -22,8 +22,9 @@ dependencies = [
 # on CPU-only machines is unchanged.
 [project.optional-dependencies]
 gpu = [
-    "nano-vllm-voxcpm>=2.0.0",
-    "torch>=2.5",
+    "nano-vllm-voxcpm==2.0.0",
+    "torch>=2.9,<2.10",
+    "flash-attn==2.8.3",
 ]
 
 [project.scripts]

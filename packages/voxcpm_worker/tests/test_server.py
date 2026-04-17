@@ -50,7 +50,7 @@ async def test_encode_reference_roundtrip() -> None:
 
         resp = await client.encode_reference(wav_bytes)
         assert len(resp.latents) == 4 * resp.feat_dim * resp.num_frames
-        assert resp.encoder_sample_rate == 24000
+        assert resp.encoder_sample_rate == 16000
     finally:
         await server.stop()
         await client.stop()

@@ -40,6 +40,15 @@ smoke:
 test:
 	uv run pytest -q
 
+test-real:
+	RUN_REAL_MODEL=1 uv run pytest -m real_model -q -s
+
+seed:
+	uv run python scripts/load_demo_voices.py
+
+measure:
+	uv run python scripts/measure_cache.py
+
 lint:
 	uv run ruff check .
 	uv run ruff format --check .

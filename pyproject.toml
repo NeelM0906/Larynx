@@ -13,8 +13,12 @@ dependencies = [
 # Installs the nano-vllm-voxcpm runtime (torch + flash-attn + CUDA). Only
 # available on the GPU box. Invoke via `uv sync --extra gpu`.
 gpu = [
-    "nano-vllm-voxcpm>=2.0.0",
-    "torch>=2.5",
+    "nano-vllm-voxcpm==2.0.0",
+    # Pinned to match the M0 smoke env (torch 2.9 + flash-attn 2.8.3).
+    # torch 2.10+ builds for CUDA 13 are ABI-incompatible with flash-attn
+    # wheels from when 2.9/cu128 was stable — see scripts/m0 notes.
+    "torch>=2.9,<2.10",
+    "flash-attn==2.8.3",
 ]
 
 [tool.uv.workspace]
@@ -61,3 +65,10 @@ ignore = ["E501", "B008", "SIM105"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["packages/gateway/tests", "packages/voxcpm_worker/tests", "packages/shared/tests"]
+# Tests that require loading the actual VoxCPM2 model on GPU. Opt-in via
+# `RUN_REAL_MODEL=1 uv run pytest -m real_model`. Default `pytest` run
+# excludes them so the mock suite stays fast.
+markers = [
+    "real_model: requires the real VoxCPM2 model on GPU (opt-in via RUN_REAL_MODEL=1)",
+]
+addopts = "-m 'not real_model'"

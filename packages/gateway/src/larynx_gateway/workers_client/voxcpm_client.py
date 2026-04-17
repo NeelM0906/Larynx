@@ -18,7 +18,7 @@ from larynx_shared.ipc import (
 
 
 class VoxCPMClient:
-    def __init__(self, channel: WorkerChannel, timeout_s: float = 120.0) -> None:
+    def __init__(self, channel: WorkerChannel, timeout_s: float = 300.0) -> None:
         self._rpc = InProcessWorkerClient(channel)
         self._timeout_s = timeout_s
 
