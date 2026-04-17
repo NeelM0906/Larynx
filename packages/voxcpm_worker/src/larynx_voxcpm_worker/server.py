@@ -25,6 +25,10 @@ from larynx_shared.ipc.messages import (
     EncodeReferenceRequest,
     EncodeReferenceResponse,
     ErrorMessage,
+    ListLorasRequest,
+    ListLorasResponse,
+    LoadLoraRequest,
+    LoadLoraResponse,
     RequestMessage,
     ResponseMessage,
     SynthesizeChunkFrame,
@@ -32,6 +36,8 @@ from larynx_shared.ipc.messages import (
     SynthesizeRequest,
     SynthesizeResponse,
     SynthesizeStreamRequest,
+    UnloadLoraRequest,
+    UnloadLoraResponse,
 )
 
 from larynx_voxcpm_worker.audio_utils import pcm_from_float
@@ -104,6 +110,12 @@ class WorkerServer:
             return await self._synthesize(msg)
         if isinstance(msg, EncodeReferenceRequest):
             return await self._encode_reference(msg)
+        if isinstance(msg, LoadLoraRequest):
+            return await self._load_lora(msg)
+        if isinstance(msg, UnloadLoraRequest):
+            return await self._unload_lora(msg)
+        if isinstance(msg, ListLorasRequest):
+            return await self._list_loras(msg)
         return ErrorMessage(
             request_id=msg.request_id,
             code="unknown_kind",
@@ -122,6 +134,7 @@ class WorkerServer:
                 cfg_value=req.cfg_value,
                 temperature=req.temperature,
                 max_generate_length=req.max_generate_length,
+                lora_name=req.lora_name,
             )
             gen_ms = int((time.perf_counter() - t0) * 1000)
             samples = self._manager.resample(samples, info.output_sample_rate, req.sample_rate)
@@ -174,6 +187,7 @@ class WorkerServer:
                 cfg_value=req.cfg_value,
                 temperature=req.temperature,
                 max_generate_length=req.max_generate_length,
+                lora_name=req.lora_name,
             ):
                 if chunk.size == 0:
                     continue
@@ -191,9 +205,7 @@ class WorkerServer:
                 )
                 chunk_index += 1
                 total_samples += len(resampled)
-            duration_ms = (
-                int(1000 * total_samples / req.sample_rate) if total_samples else 0
-            )
+            duration_ms = int(1000 * total_samples / req.sample_rate) if total_samples else 0
             log.info(
                 "voxcpm.synthesize_stream",
                 request_id=req.request_id,
@@ -226,9 +238,7 @@ class WorkerServer:
         except Exception as e:  # noqa: BLE001
             log.exception("voxcpm.synthesize_stream_failed", request_id=req.request_id)
             await self._channel.responses.put(
-                ErrorMessage(
-                    request_id=req.request_id, code="synthesis_failed", message=str(e)
-                )
+                ErrorMessage(request_id=req.request_id, code="synthesis_failed", message=str(e))
             )
 
     async def _encode_reference(
@@ -261,6 +271,44 @@ class WorkerServer:
         except Exception as e:  # noqa: BLE001
             log.exception("voxcpm.encode_reference_failed", request_id=req.request_id)
             return ErrorMessage(request_id=req.request_id, code="encode_failed", message=str(e))
+
+    # -- LoRA hot-swap handlers --------------------------------------------
+    #
+    # All three handlers share the same error-to-ErrorMessage shape. The
+    # backend raises ValueError for name-collision / not-registered and
+    # RuntimeError for LoRA-disabled / backend-not-loaded.
+
+    async def _load_lora(self, req: LoadLoraRequest) -> ResponseMessage | ErrorMessage:
+        try:
+            await self._manager.backend.load_lora(req.name, req.path)
+            log.info("voxcpm.load_lora", request_id=req.request_id, name=req.name, path=req.path)
+            return LoadLoraResponse(request_id=req.request_id, name=req.name)
+        except ValueError as e:
+            return ErrorMessage(request_id=req.request_id, code="lora_invalid", message=str(e))
+        except Exception as e:  # noqa: BLE001
+            log.exception("voxcpm.load_lora_failed", request_id=req.request_id, name=req.name)
+            return ErrorMessage(request_id=req.request_id, code="lora_load_failed", message=str(e))
+
+    async def _unload_lora(self, req: UnloadLoraRequest) -> ResponseMessage | ErrorMessage:
+        try:
+            await self._manager.backend.unload_lora(req.name)
+            log.info("voxcpm.unload_lora", request_id=req.request_id, name=req.name)
+            return UnloadLoraResponse(request_id=req.request_id, name=req.name)
+        except ValueError as e:
+            return ErrorMessage(request_id=req.request_id, code="lora_invalid", message=str(e))
+        except Exception as e:  # noqa: BLE001
+            log.exception("voxcpm.unload_lora_failed", request_id=req.request_id, name=req.name)
+            return ErrorMessage(
+                request_id=req.request_id, code="lora_unload_failed", message=str(e)
+            )
+
+    async def _list_loras(self, req: ListLorasRequest) -> ResponseMessage | ErrorMessage:
+        try:
+            names = await self._manager.backend.list_loras()
+            return ListLorasResponse(request_id=req.request_id, names=names)
+        except Exception as e:  # noqa: BLE001
+            log.exception("voxcpm.list_loras_failed", request_id=req.request_id)
+            return ErrorMessage(request_id=req.request_id, code="lora_list_failed", message=str(e))
 
 
 def install_signal_handlers(server: WorkerServer) -> None:

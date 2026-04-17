@@ -214,8 +214,6 @@ class InProcessWorkerClient(AbstractWorkerClient):
                 # Best-effort cancel. Fire-and-forget: worker handles it if
                 # the stream is still producing; ignores it otherwise.
                 try:
-                    self._channel.requests.put_nowait(
-                        CancelStreamRequest(target_request_id=rid)
-                    )
+                    self._channel.requests.put_nowait(CancelStreamRequest(target_request_id=rid))
                 except asyncio.QueueFull:  # pragma: no cover — unbounded queue
                     pass

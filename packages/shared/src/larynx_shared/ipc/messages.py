@@ -129,6 +129,11 @@ class SynthesizeRequest(RequestMessage):
     temperature: float = 1.0
     max_generate_length: int = 2000
 
+    # LoRA adapter selection (per-request, see ORCHESTRATION-M7.md §3). None
+    # means use base weights. The name must be one that a previous
+    # ``LoadLoraRequest`` registered, otherwise the worker errors out.
+    lora_name: str | None = None
+
     @field_validator("ref_audio_latents", "prompt_audio_latents", mode="before")
     @classmethod
     def _decode_latents(cls, v: object) -> bytes | None:
@@ -186,6 +191,8 @@ class SynthesizeStreamRequest(RequestMessage):
     # from VoxCPM so callers that want joint-chunk audio (e.g. batch jobs
     # reassembling to WAV) can do their own smoothing.
     crossfade_ms: float = 10.0
+    # See SynthesizeRequest.lora_name.
+    lora_name: str | None = None
 
     @field_validator("ref_audio_latents", "prompt_audio_latents", mode="before")
     @classmethod
@@ -279,6 +286,47 @@ class EncodeReferenceResponse(ResponseMessage):
     @field_serializer("latents", when_used="json")
     def _ser_latents(self, v: bytes) -> str:
         return base64.b64encode(v).decode("ascii")
+
+
+# ---------------------------------------------------------------------------
+# TTS — LoRA hot-swap (see ORCHESTRATION-M7.md §3)
+#
+# nano-vllm-voxcpm's ``AsyncVoxCPM2ServerPool`` exposes
+# register_lora / unregister_lora / list_loras; we mirror that into the
+# IPC protocol so the gateway can hot-load a fine-tuned LoRA after the
+# training_worker writes its weights to disk. Per-request selection lives
+# on ``SynthesizeRequest.lora_name`` above.
+# ---------------------------------------------------------------------------
+
+
+class LoadLoraRequest(RequestMessage):
+    kind: Literal["load_lora"] = "load_lora"
+    name: str
+    path: str  # directory holding lora_weights.safetensors + lora_config.json
+
+
+class LoadLoraResponse(ResponseMessage):
+    kind: Literal["load_lora"] = "load_lora"
+    name: str
+
+
+class UnloadLoraRequest(RequestMessage):
+    kind: Literal["unload_lora"] = "unload_lora"
+    name: str
+
+
+class UnloadLoraResponse(ResponseMessage):
+    kind: Literal["unload_lora"] = "unload_lora"
+    name: str
+
+
+class ListLorasRequest(RequestMessage):
+    kind: Literal["list_loras"] = "list_loras"
+
+
+class ListLorasResponse(ResponseMessage):
+    kind: Literal["list_loras"] = "list_loras"
+    names: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

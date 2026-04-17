@@ -35,9 +35,7 @@ class _End(StreamEnd):
     kind: Literal["fake_end"] = "fake_end"
 
 
-async def _fake_worker(
-    channel: WorkerChannel, cancel_event: asyncio.Event | None = None
-) -> None:
+async def _fake_worker(channel: WorkerChannel, cancel_event: asyncio.Event | None = None) -> None:
     """Pull one request, emit ``count`` chunks, then an end frame.
 
     If a CancelStreamRequest arrives mid-stream, stop emitting and set the
