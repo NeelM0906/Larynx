@@ -112,9 +112,7 @@ async def ws_tts_stream(ws: WebSocket) -> None:
             prompt_text=cfg.prompt_text,
         )
         try:
-            conditioning = await tts_service.resolve_conditioning(
-                tts_req, library, voxcpm=client
-            )
+            conditioning = await tts_service.resolve_conditioning(tts_req, library, voxcpm=client)
         except ValueError as e:
             await _send_error(ws, "invalid_input", str(e))
             return
@@ -211,9 +209,7 @@ async def ws_tts_stream(ws: WebSocket) -> None:
 
 async def _send_error(ws: WebSocket, code: str, message: str) -> None:
     try:
-        await ws.send_text(
-            json.dumps({"type": "error", "code": code, "message": message})
-        )
+        await ws.send_text(json.dumps({"type": "error", "code": code, "message": message}))
     except Exception:  # pragma: no cover — client already gone
         return
     try:

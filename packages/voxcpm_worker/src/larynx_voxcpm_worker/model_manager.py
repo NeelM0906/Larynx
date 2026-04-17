@@ -17,6 +17,7 @@ Mode selection: ``LARYNX_TTS_MODE`` env var (see .env.example).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import math
@@ -34,6 +35,14 @@ import structlog
 from numpy.typing import NDArray
 
 log = structlog.get_logger(__name__)
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    """Parse an env var as a bool; accepts 1/0, true/false, yes/no (any case)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 # Values read out of a loaded VoxCPM2 via get_model_info(); the mock
@@ -89,6 +98,7 @@ class VoxCPMBackend(ABC):
         cfg_value: float = 2.0,
         temperature: float = 1.0,
         max_generate_length: int = 2000,
+        lora_name: str | None = None,
     ) -> NDArray[np.float32]: ...
 
     @abstractmethod
@@ -102,6 +112,7 @@ class VoxCPMBackend(ABC):
         cfg_value: float = 2.0,
         temperature: float = 1.0,
         max_generate_length: int = 2000,
+        lora_name: str | None = None,
     ) -> AsyncIterator[NDArray[np.float32]]:
         """Async generator yielding chunks of float32 mono audio as they're
         produced at the model's native output sample rate.
@@ -112,6 +123,25 @@ class VoxCPMBackend(ABC):
         explicit terminator is yielded; iteration just ends.
         """
         ...
+
+    # -- LoRA hot-swap --------------------------------------------------------
+    #
+    # Mirrors ``AsyncVoxCPM2ServerPool.{register,unregister,list}_lora``.
+    # Registration is CPU-resident for the life of the worker; the engine
+    # manages GPU-slot LRU internally. ``synthesize(..., lora_name=...)``
+    # selects per-request. See ORCHESTRATION-M7.md §3.
+
+    @abstractmethod
+    async def load_lora(self, name: str, path: str) -> None:
+        """Register a LoRA by directory path. Duplicate name -> ValueError."""
+
+    @abstractmethod
+    async def unload_lora(self, name: str) -> None:
+        """Unregister a LoRA. Unknown name -> ValueError."""
+
+    @abstractmethod
+    async def list_loras(self) -> list[str]:
+        """Names of currently-registered LoRAs."""
 
     async def close(self) -> None:  # noqa: B027 — intentional no-op default
         """Release resources. Override in subclasses that hold GPU memory."""
@@ -150,6 +180,10 @@ class MockVoxCPMBackend(VoxCPMBackend):
         self._encoder_sr = encoder_sample_rate
         self._output_sr = output_sample_rate
         self._feat_dim = feat_dim
+        # LoRA registry: name -> path (path never validated here; the real
+        # backend validates at nanovllm register_lora time — mock stays dumb
+        # so unit tests don't have to ship a real LoRA artifact).
+        self._loras: dict[str, str] = {}
 
     async def get_info(self) -> ModelInfo:
         return ModelInfo(
@@ -190,9 +224,12 @@ class MockVoxCPMBackend(VoxCPMBackend):
         cfg_value: float = 2.0,
         temperature: float = 1.0,
         max_generate_length: int = 2000,
+        lora_name: str | None = None,
     ) -> NDArray[np.float32]:
         if not text:
             raise ValueError("text must not be empty")
+        if lora_name is not None and lora_name not in self._loras:
+            raise ValueError(f"LoRA {lora_name!r} is not registered")
 
         duration_ms = max(self.MIN_DURATION_MS, self.MS_PER_CHAR * len(text))
         num_samples = int(self._output_sr * duration_ms / 1000)
@@ -209,6 +246,13 @@ class MockVoxCPMBackend(VoxCPMBackend):
         if prompt_audio_latents is not None and len(prompt_audio_latents) >= 4:
             (first_float,) = struct.unpack("<f", prompt_audio_latents[:4])
             voice_shift += float(np.clip(first_float, -1.0, 1.0)) * 30.0
+        # LoRA conditioning: hash the name into a deterministic offset.
+        # ±80 Hz range lets a LoRA clearly differ from the base text-hash
+        # pitch without saturating against voice-latent shifts.
+        if lora_name is not None:
+            lora_digest = hashlib.sha256(lora_name.encode("utf-8")).digest()
+            lora_byte = (lora_digest[0] / 255.0) * 2.0 - 1.0
+            voice_shift += lora_byte * 80.0
         freq_hz = base_freq + voice_shift
 
         t = np.arange(num_samples, dtype=np.float32) / self._output_sr
@@ -230,6 +274,7 @@ class MockVoxCPMBackend(VoxCPMBackend):
         cfg_value: float = 2.0,
         temperature: float = 1.0,
         max_generate_length: int = 2000,
+        lora_name: str | None = None,
     ) -> AsyncIterator[NDArray[np.float32]]:
         # Delegate to the one-shot path and slice the result into chunks so
         # the streaming code path is exercised in mock mode. ~120ms chunks
@@ -244,6 +289,7 @@ class MockVoxCPMBackend(VoxCPMBackend):
             cfg_value=cfg_value,
             temperature=temperature,
             max_generate_length=max_generate_length,
+            lora_name=lora_name,
         )
         chunk_samples = int(self._output_sr * 0.12)
         if chunk_samples <= 0:
@@ -255,10 +301,49 @@ class MockVoxCPMBackend(VoxCPMBackend):
             # sessions; real backend awaits the GPU between chunks naturally.
             await asyncio.sleep(0)
 
+    # -- LoRA hot-swap (mock) -----------------------------------------------
+
+    async def load_lora(self, name: str, path: str) -> None:
+        if name in self._loras:
+            raise ValueError(f"LoRA {name!r} is already registered")
+        self._loras[name] = path
+
+    async def unload_lora(self, name: str) -> None:
+        if name not in self._loras:
+            raise ValueError(f"LoRA {name!r} is not registered")
+        del self._loras[name]
+
+    async def list_loras(self) -> list[str]:
+        return sorted(self._loras)
+
 
 # ---------------------------------------------------------------------------
 # Real backend — nano-vllm-voxcpm adapter
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LoRAInitConfig:
+    """Init-time LoRA constraints for nano-vllm-voxcpm.
+
+    These are fixed once per worker boot — ``max_loras`` / ``max_lora_rank``
+    control GPU slot pool shape, ``enable_*`` and ``target_modules_*`` must
+    be supersets of every trained LoRA we'll serve. See ORCHESTRATION-M7.md
+    §3.2 for the reasoning behind the defaults.
+    """
+
+    max_loras: int = 8
+    max_lora_rank: int = 32
+    enable_lm: bool = True
+    enable_dit: bool = True
+    enable_proj: bool = False
+    target_modules_lm: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
+    target_modules_dit: tuple[str, ...] = ("q_proj", "k_proj", "v_proj", "o_proj")
+    target_proj_modules: tuple[str, ...] = (
+        "enc_to_lm_proj",
+        "lm_to_dit_proj",
+        "res_to_dit_proj",
+    )
 
 
 class VoxCPMBackendReal(VoxCPMBackend):
@@ -280,6 +365,7 @@ class VoxCPMBackendReal(VoxCPMBackend):
         max_num_seqs: int = 16,
         max_model_len: int = 4096,
         gpu_memory_utilization: float = 0.80,
+        lora_config: LoRAInitConfig | None = None,
     ) -> None:
         self._model_ref = model
         self._gpu = gpu
@@ -288,8 +374,23 @@ class VoxCPMBackendReal(VoxCPMBackend):
         self._max_num_seqs = max_num_seqs
         self._max_model_len = max_model_len
         self._gpu_memory_utilization = gpu_memory_utilization
+        self._lora_config = lora_config
         self._pool: Any | None = None
         self._info: ModelInfo | None = None
+        # Installed ``nano-vllm-voxcpm==2.0.0`` exposes a per-session
+        # LoRA API (``load_lora(path)`` + ``set_lora_enabled(bool)``),
+        # not the per-request ``register_lora(name, path)`` +
+        # ``generate(lora_name=...)`` surface the design doc sketched
+        # against the ``third_party/`` HEAD. We keep our public
+        # ``load_lora(name, path)`` / ``unload_lora(name)`` /
+        # ``list_loras()`` contract and implement it on top of 2.0.0
+        # by maintaining the name→path mapping ourselves + swapping
+        # the active LoRA on the pool lazily before each synthesize.
+        # ``_lora_lock`` serialises concurrent synthesis that would
+        # otherwise race on the swap.
+        self._loras: dict[str, str] = {}
+        self._active_lora: str | None = None
+        self._lora_lock: asyncio.Lock | None = None
 
     async def load(self) -> None:
         try:
@@ -300,7 +401,30 @@ class VoxCPMBackendReal(VoxCPMBackend):
                 "with `uv sync --extra gpu` on the GPU box."
             ) from e
 
-        log.info("voxcpm.loading", gpu=self._gpu, model=self._model_ref)
+        lora_runtime_config = None
+        if self._lora_config is not None:
+            # Import lazily so the mock-mode CI box doesn't need nano-vllm
+            # installed at all. The config type lives in the upstream
+            # package; we marshal our frozen dataclass into it.
+            from nanovllm_voxcpm.models.voxcpm2.config import LoRAConfig
+
+            lora_runtime_config = LoRAConfig(
+                enable_lm=self._lora_config.enable_lm,
+                enable_dit=self._lora_config.enable_dit,
+                enable_proj=self._lora_config.enable_proj,
+                max_loras=self._lora_config.max_loras,
+                max_lora_rank=self._lora_config.max_lora_rank,
+                target_modules_lm=list(self._lora_config.target_modules_lm),
+                target_modules_dit=list(self._lora_config.target_modules_dit),
+                target_proj_modules=list(self._lora_config.target_proj_modules),
+            )
+
+        log.info(
+            "voxcpm.loading",
+            gpu=self._gpu,
+            model=self._model_ref,
+            lora_enabled=lora_runtime_config is not None,
+        )
         self._pool = VoxCPM.from_pretrained(
             model=self._model_ref,
             inference_timesteps=self._inference_timesteps,
@@ -310,6 +434,7 @@ class VoxCPMBackendReal(VoxCPMBackend):
             gpu_memory_utilization=self._gpu_memory_utilization,
             enforce_eager=False,
             devices=[self._gpu],
+            lora_config=lora_runtime_config,
         )
         # AsyncVoxCPM2ServerPool.wait_for_ready awaits model init in the
         # child process; model_info has the real feat_dim and sample rates.
@@ -348,6 +473,7 @@ class VoxCPMBackendReal(VoxCPMBackend):
         cfg_value: float = 2.0,
         temperature: float = 1.0,
         max_generate_length: int = 2000,
+        lora_name: str | None = None,
     ) -> NDArray[np.float32]:
         chunks: list[NDArray[np.float32]] = []
         async for chunk in self.synthesize_stream(
@@ -358,6 +484,7 @@ class VoxCPMBackendReal(VoxCPMBackend):
             cfg_value=cfg_value,
             temperature=temperature,
             max_generate_length=max_generate_length,
+            lora_name=lora_name,
         ):
             chunks.append(chunk)
         if not chunks:
@@ -374,11 +501,31 @@ class VoxCPMBackendReal(VoxCPMBackend):
         cfg_value: float = 2.0,
         temperature: float = 1.0,
         max_generate_length: int = 2000,
+        lora_name: str | None = None,
     ) -> AsyncIterator[NDArray[np.float32]]:
         if self._pool is None:
             raise RuntimeError("backend not loaded")
         if not text:
             raise ValueError("text must not be empty")
+
+        # Swap the active LoRA on the underlying pool if the request
+        # asks for one different from what's currently active. The swap
+        # is serialised by ``_lora_lock`` so two concurrent syntheses
+        # don't race on it. Synthesis itself is allowed to interleave
+        # once the right LoRA is active (the generate call is a
+        # concurrent read from the pool's perspective).
+        if lora_name is not None and lora_name not in self._loras:
+            raise ValueError(f"LoRA {lora_name!r} is not registered")
+        if self._lora_lock is None:
+            self._lora_lock = asyncio.Lock()
+        async with self._lora_lock:
+            if lora_name != self._active_lora:
+                if lora_name is None:
+                    await self._pool.set_lora_enabled(False)
+                else:
+                    await self._pool.load_lora(self._loras[lora_name])
+                    await self._pool.set_lora_enabled(True)
+                self._active_lora = lora_name
 
         async for chunk in self._pool.generate(
             target_text=text,
@@ -391,6 +538,44 @@ class VoxCPMBackendReal(VoxCPMBackend):
             ref_audio_latents=ref_audio_latents,
         ):
             yield np.asarray(chunk, dtype=np.float32).reshape(-1)
+
+    # -- LoRA hot-swap (real) -----------------------------------------------
+    #
+    # Upstream ``nano-vllm-voxcpm==2.0.0`` gives us a per-session LoRA
+    # API — see the class docstring + __init__ for why we wrap it in
+    # our own name-keyed registry. When a newer upstream ships the
+    # per-request ``register_lora(name, path)`` + ``lora_name`` generate
+    # kwarg, we can flip this to a thin delegate.
+
+    async def load_lora(self, name: str, path: str) -> None:
+        if self._pool is None:
+            raise RuntimeError("backend not loaded")
+        if self._lora_config is None:
+            raise RuntimeError(
+                "LoRA is not enabled on this backend; pass lora_config to "
+                "VoxCPMBackendReal() at init or set LARYNX_VOXCPM_LORA_* env."
+            )
+        if name in self._loras:
+            raise ValueError(f"LoRA {name!r} is already registered")
+        self._loras[name] = path
+
+    async def unload_lora(self, name: str) -> None:
+        if self._pool is None:
+            raise RuntimeError("backend not loaded")
+        if name not in self._loras:
+            raise ValueError(f"LoRA {name!r} is not registered")
+        if self._active_lora == name:
+            # Drop it off the pool before forgetting it on our side so
+            # a later synthesis without a ``lora_name`` gets base
+            # weights, not a stale adapter.
+            await self._pool.set_lora_enabled(False)
+            self._active_lora = None
+        del self._loras[name]
+
+    async def list_loras(self) -> list[str]:
+        if self._pool is None:
+            raise RuntimeError("backend not loaded")
+        return sorted(self._loras)
 
     async def close(self) -> None:
         pool = self._pool
@@ -429,6 +614,20 @@ class VoxCPMModelManager:
 
         gpu = int(os.environ.get("LARYNX_VOXCPM_GPU", "0"))
         model_ref = os.environ.get("LARYNX_VOXCPM_MODEL", "openbmb/VoxCPM2")
+
+        # LoRA config is opt-in via LARYNX_VOXCPM_LORA_ENABLED so non-M7
+        # deployments don't pay the GPU-slot preallocation cost. Defaults
+        # match ORCHESTRATION-M7.md §3.2.
+        lora_config: LoRAInitConfig | None = None
+        if _env_bool("LARYNX_VOXCPM_LORA_ENABLED", default=True):
+            lora_config = LoRAInitConfig(
+                max_loras=int(os.environ.get("LARYNX_VOXCPM_LORA_MAX_LORAS", "8")),
+                max_lora_rank=int(os.environ.get("LARYNX_VOXCPM_LORA_MAX_RANK", "32")),
+                enable_lm=_env_bool("LARYNX_VOXCPM_LORA_ENABLE_LM", default=True),
+                enable_dit=_env_bool("LARYNX_VOXCPM_LORA_ENABLE_DIT", default=True),
+                enable_proj=_env_bool("LARYNX_VOXCPM_LORA_ENABLE_PROJ", default=False),
+            )
+
         backend = VoxCPMBackendReal(
             model=model_ref,
             gpu=gpu,
@@ -437,9 +636,10 @@ class VoxCPMModelManager:
             max_num_seqs=int(os.environ.get("LARYNX_VOXCPM_MAX_NUM_SEQS", "16")),
             max_model_len=int(os.environ.get("LARYNX_VOXCPM_MAX_MODEL_LEN", "4096")),
             gpu_memory_utilization=float(os.environ.get("LARYNX_VOXCPM_GPU_MEM_UTIL", "0.80")),
+            lora_config=lora_config,
         )
         await backend.load()
-        log.info("voxcpm.mode", mode="voxcpm", gpu=gpu)
+        log.info("voxcpm.mode", mode="voxcpm", gpu=gpu, lora=lora_config is not None)
         return cls(backend)
 
     async def close(self) -> None:

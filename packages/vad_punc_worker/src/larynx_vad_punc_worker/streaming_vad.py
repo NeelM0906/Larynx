@@ -135,10 +135,7 @@ class MockStreamingVad(StreamingVad):
             if voiced:
                 s.silence_accumulated_ms = 0.0
                 s.active_accumulated_ms += ms
-                if (
-                    s.state == "silent"
-                    and s.active_accumulated_ms >= self.SPEECH_START_HOLD_MS
-                ):
+                if s.state == "silent" and s.active_accumulated_ms >= self.SPEECH_START_HOLD_MS:
                     s.state = "speaking"
                     events.append(
                         VadStreamEvent(

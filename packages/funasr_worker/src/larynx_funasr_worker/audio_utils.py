@@ -34,7 +34,9 @@ def pcm_to_float32(pcm_s16le: bytes, sample_rate: int) -> NDArray[np.float32]:
     return int16_to_float32(samples)
 
 
-def decode_any_to_float32(audio_bytes: bytes, target_sr: int = FUNASR_SAMPLE_RATE) -> NDArray[np.float32]:
+def decode_any_to_float32(
+    audio_bytes: bytes, target_sr: int = FUNASR_SAMPLE_RATE
+) -> NDArray[np.float32]:
     """Decode an arbitrary audio container (wav/mp3/flac/...) to 16 kHz mono.
 
     Used by the smoke script / real-model tests that pass a file blob

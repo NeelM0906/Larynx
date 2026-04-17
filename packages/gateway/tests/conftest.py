@@ -79,7 +79,11 @@ def _reset_test_db() -> None:
     """
     eng = create_engine(TEST_DB_URL_SQLA, isolation_level="AUTOCOMMIT")
     with eng.connect() as conn:
+        # voices first so any ft_job_id back-link dies before the job;
+        # fine_tune_jobs after (order doesn't strictly matter because
+        # there's no DB-level FK, but this is the logical direction).
         conn.execute(text("TRUNCATE TABLE voices RESTART IDENTITY CASCADE"))
+        conn.execute(text("TRUNCATE TABLE fine_tune_jobs RESTART IDENTITY CASCADE"))
     eng.dispose()
 
 

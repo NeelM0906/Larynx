@@ -148,9 +148,7 @@ class STTStreamSession:
             raise
         except Exception as e:  # noqa: BLE001
             log.exception("stt_stream.session_error", session_id=self._session.session_id)
-            await self._emit(
-                {"type": "error", "code": "internal_error", "message": str(e)}
-            )
+            await self._emit({"type": "error", "code": "internal_error", "message": str(e)})
         finally:
             # Final flush: tell VAD this is the end; close any open
             # utterance as final before we tear down.
@@ -210,9 +208,7 @@ class STTStreamSession:
                 session_id=self._session.session_id, pcm_s16le=pcm
             )
         except WorkerError as e:
-            await self._emit(
-                {"type": "error", "code": e.code, "message": e.message}
-            )
+            await self._emit({"type": "error", "code": e.code, "message": e.message})
             return
         await self._handle_vad_events(feed.events, feed.vad_state, feed.session_ms)
 
@@ -227,9 +223,7 @@ class STTStreamSession:
                 async with self._lock:
                     self._session.state = "speaking"
                     self._session.utterance_start_ms = ev.session_ms
-                    self._session.utterance_start_byte = self._session.bytes_at_ms(
-                        ev.session_ms
-                    )
+                    self._session.utterance_start_byte = self._session.bytes_at_ms(ev.session_ms)
                     self._session.prev_text = ""
                     self._session.last_partial_wall = time.monotonic()
                     self._session.utterance_ordinal += 1
@@ -324,9 +318,7 @@ class STTStreamSession:
             async with self._lock:
                 if self._session.state != "speaking":
                     continue
-                pcm = bytes(
-                    self._session.audio_buffer[self._session.utterance_start_byte :]
-                )
+                pcm = bytes(self._session.audio_buffer[self._session.utterance_start_byte :])
                 prev_text = self._session.prev_text
                 ordinal_at_decode_start = self._session.utterance_ordinal
             if len(pcm) < self._session.bytes_at_ms(80):
@@ -346,9 +338,7 @@ class STTStreamSession:
                     drop_tail_tokens=self._session.cfg.drop_tail_tokens,
                 )
             except WorkerError as e:
-                await self._emit(
-                    {"type": "error", "code": e.code, "message": e.message}
-                )
+                await self._emit({"type": "error", "code": e.code, "message": e.message})
                 continue
             decode_ms = int((time.monotonic() - t0) * 1000)
             now = time.monotonic()

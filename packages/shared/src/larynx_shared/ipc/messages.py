@@ -129,6 +129,11 @@ class SynthesizeRequest(RequestMessage):
     temperature: float = 1.0
     max_generate_length: int = 2000
 
+    # LoRA adapter selection (per-request, see ORCHESTRATION-M7.md §3). None
+    # means use base weights. The name must be one that a previous
+    # ``LoadLoraRequest`` registered, otherwise the worker errors out.
+    lora_name: str | None = None
+
     @field_validator("ref_audio_latents", "prompt_audio_latents", mode="before")
     @classmethod
     def _decode_latents(cls, v: object) -> bytes | None:
@@ -186,6 +191,8 @@ class SynthesizeStreamRequest(RequestMessage):
     # from VoxCPM so callers that want joint-chunk audio (e.g. batch jobs
     # reassembling to WAV) can do their own smoothing.
     crossfade_ms: float = 10.0
+    # See SynthesizeRequest.lora_name.
+    lora_name: str | None = None
 
     @field_validator("ref_audio_latents", "prompt_audio_latents", mode="before")
     @classmethod
@@ -279,6 +286,104 @@ class EncodeReferenceResponse(ResponseMessage):
     @field_serializer("latents", when_used="json")
     def _ser_latents(self, v: bytes) -> str:
         return base64.b64encode(v).decode("ascii")
+
+
+# ---------------------------------------------------------------------------
+# TTS — LoRA hot-swap (see ORCHESTRATION-M7.md §3)
+#
+# nano-vllm-voxcpm's ``AsyncVoxCPM2ServerPool`` exposes
+# register_lora / unregister_lora / list_loras; we mirror that into the
+# IPC protocol so the gateway can hot-load a fine-tuned LoRA after the
+# training_worker writes its weights to disk. Per-request selection lives
+# on ``SynthesizeRequest.lora_name`` above.
+# ---------------------------------------------------------------------------
+
+
+class LoadLoraRequest(RequestMessage):
+    kind: Literal["load_lora"] = "load_lora"
+    name: str
+    path: str  # directory holding lora_weights.safetensors + lora_config.json
+
+
+class LoadLoraResponse(ResponseMessage):
+    kind: Literal["load_lora"] = "load_lora"
+    name: str
+
+
+class UnloadLoraRequest(RequestMessage):
+    kind: Literal["unload_lora"] = "unload_lora"
+    name: str
+
+
+class UnloadLoraResponse(ResponseMessage):
+    kind: Literal["unload_lora"] = "unload_lora"
+    name: str
+
+
+class ListLorasRequest(RequestMessage):
+    kind: Literal["list_loras"] = "list_loras"
+
+
+class ListLorasResponse(ResponseMessage):
+    kind: Literal["list_loras"] = "list_loras"
+    names: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Training — LoRA fine-tune (see ORCHESTRATION-M7.md §5.3)
+#
+# One TrainLoraRequest kicks off a fine-tune. The worker then streams
+# TrainLogChunk (one per stdout line), TrainStateChunk (when a tracker
+# step line is parseable), and ends with exactly one TrainDoneFrame. A
+# CancelStreamRequest mid-flight triggers §1.1 cancellation and the
+# TrainDoneFrame reports state=CANCELLED.
+# ---------------------------------------------------------------------------
+
+
+class TrainLoraRequest(RequestMessage):
+    kind: Literal["train_lora"] = "train_lora"
+    job_id: str
+    dataset_id: str
+    voice_name: str
+    # Arbitrary overrides merged onto the upstream voxcpm_finetune_lora.yaml
+    # template — rank, alpha, num_iters, learning_rate, etc. Unknown keys
+    # pass through unmodified so the gateway doesn't have to mirror every
+    # upstream field. Serialised as JSON over the wire.
+    config_overrides: dict[str, object] = Field(default_factory=dict)
+    # Explicit opt-out of Phase-B transcript quality check. Default True;
+    # see ORCHESTRATION-M7.md §2.2.
+    validate_transcripts: bool = True
+
+
+class TrainLogChunk(StreamChunk):
+    kind: Literal["train_log"] = "train_log"
+    line: str
+
+
+class TrainStateChunk(StreamChunk):
+    """Structured progress extracted from an upstream tracker line.
+
+    Emitted opportunistically — not every training line parses to a
+    state event. Callers should treat a gap between events as "no new
+    progress", not "training stuck".
+    """
+
+    kind: Literal["train_state"] = "train_state"
+    step: int
+    loss_diff: float | None = None
+    loss_stop: float | None = None
+    lr: float | None = None
+    epoch: float | None = None
+
+
+class TrainDoneFrame(StreamEnd):
+    kind: Literal["train_done"] = "train_done"
+    # "SUCCEEDED" | "FAILED" | "CANCELLED". String rather than Literal so
+    # adding a state here doesn't cascade into a mypy update everywhere.
+    state: str
+    voice_id: str | None = None
+    error_code: str | None = None
+    error_detail: str | None = None
 
 
 # ---------------------------------------------------------------------------

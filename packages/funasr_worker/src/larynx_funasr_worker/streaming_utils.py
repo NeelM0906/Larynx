@@ -51,7 +51,7 @@ def drop_last_n_tokens(text: str, tokenizer: _TokenizerLike, n: int = 5) -> str:
     ids = tokenizer.encode(text)
     if len(ids) <= n:
         return ""
-    return tokenizer.decode(ids[: -n]).replace("\ufffd", "")
+    return tokenizer.decode(ids[:-n]).replace("\ufffd", "")
 
 
 def tokenizer_from_kwargs(kwargs: dict[str, Any]) -> _TokenizerLike:

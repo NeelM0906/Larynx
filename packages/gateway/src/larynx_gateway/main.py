@@ -11,6 +11,7 @@ Shutdown is symmetric.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import pathlib
 from collections.abc import AsyncIterator
@@ -27,10 +28,11 @@ from larynx_voxcpm_worker.model_manager import VoxCPMModelManager
 from larynx_voxcpm_worker.server import WorkerServer
 
 from larynx_gateway.config import Settings, get_settings
-from larynx_gateway.db.session import dispose_engine, init_engine
+from larynx_gateway.db.session import dispose_engine, get_session, init_engine
 from larynx_gateway.logging import configure_logging
 from larynx_gateway.routes import (
     conversation,
+    finetune,
     health,
     stt,
     stt_stream,
@@ -38,8 +40,10 @@ from larynx_gateway.routes import (
     tts_stream,
     voices,
 )
+from larynx_gateway.services.boot_reconcile import load_lora_voices, reap_orphan_jobs
 from larynx_gateway.services.latent_cache import LatentCache, build_redis_client
 from larynx_gateway.services.llm_client import LLMClient
+from larynx_gateway.services.training_logs import TrainingLogStore
 from larynx_gateway.services.voice_files import resolve_data_dir
 from larynx_gateway.workers_client.base import WorkerChannel
 from larynx_gateway.workers_client.funasr_client import FunASRClient
@@ -70,6 +74,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.redis_client = redis_client
     app.state.latent_cache = latent_cache
     app.state.design_ttl_s = settings.larynx_voice_design_ttl_s
+
+    # M7 fine-tune scaffolding — shared across every training job.
+    # Tests may pre-populate ``training_subprocess_hook`` on app.state
+    # before the lifespan runs; production uses the default
+    # run_training_subprocess.
+    app.state.training_log_store = TrainingLogStore(redis_client)
+    app.state.gpu_train_lock = asyncio.Lock()
+    app.state.ft_jobs = {}
+    app.state.training_min_seconds = settings.larynx_ft_min_seconds
 
     # VoxCPM worker + client (in-process).
     os.environ.setdefault("LARYNX_TTS_MODE", settings.larynx_tts_mode)
@@ -124,6 +137,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.vad_punc_manager = vad_punc_manager
     app.state.vad_punc_worker = vad_punc_worker
     app.state.vad_punc_client = vad_punc_client
+
+    # M7 boot reconciliation — must run AFTER voxcpm_worker is ready and
+    # BEFORE we serve HTTP traffic, so a synthesis request using a LoRA
+    # voice never races ahead of its register_lora. See
+    # ORCHESTRATION-M7.md §8.5.
+    async for db_session in get_session():
+        unloaded = await load_lora_voices(db_session, client)
+        await reap_orphan_jobs(db_session, grace_seconds=settings.larynx_ft_orphan_grace_seconds)
+        # Stash the loaded/failed status for the /v1/voices route so it
+        # can surface an ``unloaded`` flag on failed rows. Transient —
+        # not persisted, recomputed on next boot.
+        app.state.lora_load_status = {vid: ok for vid, ok in unloaded.items()}
+        break
 
     # LLM client (OpenRouter). Shared across conversation sessions; one
     # httpx connection pool per gateway process. API key can be empty
@@ -189,6 +215,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(stt.router)
     app.include_router(stt_stream.router)
     app.include_router(conversation.router)
+    app.include_router(finetune.router)
     from larynx_gateway.routes import openai_compat
 
     app.include_router(openai_compat.router)
@@ -199,7 +226,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # registered above and take precedence.
     _playground_dir = pathlib.Path(__file__).resolve().parents[4] / "apps" / "playground-test"
     if _playground_dir.is_dir():
-        app.mount("/playground", StaticFiles(directory=_playground_dir, html=True), name="playground")
+        app.mount(
+            "/playground", StaticFiles(directory=_playground_dir, html=True), name="playground"
+        )
 
     return app
 

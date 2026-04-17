@@ -6,12 +6,14 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from larynx_gateway.db.models import VoiceSource
+
 
 class VoiceResponse(BaseModel):
     id: str
     name: str
     description: str | None = None
-    source: str
+    source: VoiceSource
     sample_rate_hz: int | None = None
     duration_ms: int | None = None
     prompt_text: str | None = None

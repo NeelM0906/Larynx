@@ -130,14 +130,10 @@ class WorkerServer:
                 ],
             )
         except ValueError as e:
-            return ErrorMessage(
-                request_id=req.request_id, code="invalid_input", message=str(e)
-            )
+            return ErrorMessage(request_id=req.request_id, code="invalid_input", message=str(e))
         except Exception as e:  # noqa: BLE001
             log.exception("vad.segment_failed", request_id=req.request_id)
-            return ErrorMessage(
-                request_id=req.request_id, code="segment_failed", message=str(e)
-            )
+            return ErrorMessage(request_id=req.request_id, code="segment_failed", message=str(e))
 
     async def _punctuate(self, req: PunctuateRequest) -> ResponseMessage | ErrorMessage:
         try:
@@ -156,9 +152,7 @@ class WorkerServer:
             return PunctuateResponse(request_id=req.request_id, text=text, applied=applied)
         except Exception as e:  # noqa: BLE001
             log.exception("punc.punctuate_failed", request_id=req.request_id)
-            return ErrorMessage(
-                request_id=req.request_id, code="punctuate_failed", message=str(e)
-            )
+            return ErrorMessage(request_id=req.request_id, code="punctuate_failed", message=str(e))
 
     # -- streaming VAD -------------------------------------------------------
 
@@ -202,18 +196,14 @@ class WorkerServer:
                 session_ms=session_ms,
             )
         except KeyError as e:
-            return ErrorMessage(
-                request_id=req.request_id, code="unknown_session", message=str(e)
-            )
+            return ErrorMessage(request_id=req.request_id, code="unknown_session", message=str(e))
         except Exception as e:  # noqa: BLE001
             log.exception("vad.stream_feed_failed", session_id=req.session_id)
             return ErrorMessage(
                 request_id=req.request_id, code="vad_stream_feed_failed", message=str(e)
             )
 
-    async def _vad_stream_close(
-        self, req: VadStreamCloseRequest
-    ) -> ResponseMessage | ErrorMessage:
+    async def _vad_stream_close(self, req: VadStreamCloseRequest) -> ResponseMessage | ErrorMessage:
         try:
             vad = await self._get_streaming_vad()
             await vad.close(req.session_id)
@@ -222,9 +212,7 @@ class WorkerServer:
                 request_id=req.request_id,
                 session_id=req.session_id,
             )
-            return VadStreamCloseResponse(
-                request_id=req.request_id, session_id=req.session_id
-            )
+            return VadStreamCloseResponse(request_id=req.request_id, session_id=req.session_id)
         except Exception as e:  # noqa: BLE001
             log.exception("vad.stream_close_failed", session_id=req.session_id)
             return ErrorMessage(

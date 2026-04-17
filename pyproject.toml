@@ -8,6 +8,7 @@ dependencies = [
     "larynx-voxcpm-worker",
     "larynx-funasr-worker",
     "larynx-vad-punc-worker",
+    "larynx-training-worker",
     "larynx-gateway",
 ]
 
@@ -22,21 +23,47 @@ gpu = [
     # wheels from when 2.9/cu128 was stable — see scripts/m0 notes.
     "torch>=2.9,<2.10",
     "torchaudio>=2.9,<2.10",
+    # flash-attn MUST come from the Dao-AILab prebuilt wheel, not PyPI
+    # sdist. The PyPI release ships source only; building from source on
+    # this host picks up the system cu13 nvcc and produces a binary that
+    # demands libcudart.so.13 — incompatible with torch 2.9's bundled
+    # cu12 runtime. The URL pin below (in [tool.uv.sources]) overrides
+    # the PyPI source resolution so the wheel is fetched verbatim.
     "flash-attn==2.8.3",
     "vllm==0.13.0",
     "funasr>=1.3.0",
     "transformers>=4.51.3",
+    # Runtime deps of third_party/VoxCPM/scripts/train_voxcpm_finetune.py
+    # — the LoRA training subprocess imports these + the voxcpm package
+    # itself (found via PYTHONPATH injection at spawn time; see
+    # training_worker.subprocess_runner._spawn_subprocess). We install
+    # only the *PyPI* leaves here; the voxcpm package itself is NOT
+    # installed into this venv so the design-doc §0 boundary holds
+    # (our code must not import from third_party/).
+    "argbind",
+    "tensorboardX",
+    "addict",
+    "wetext",
+    "inflect",
+    "einops",
+    "torchcodec",
+    "modelscope",
+    "spaces",
+    "simplejson",
+    "sortedcontainers",
+    "datasets>=3,<4",
+    "matplotlib",
 ]
 
 [tool.uv.workspace]
-# Add new workers here as they're built: M7 -> training_worker. The spec
-# says `packages/*` in REPO_STRUCTURE.md; we list members explicitly so a
-# just-created directory with no pyproject.toml doesn't break `uv sync`.
+# REPO_STRUCTURE.md enumerates packages/* explicitly; the workspace list
+# below mirrors that. training_worker joined in M7.
 members = [
     "packages/shared",
     "packages/voxcpm_worker",
     "packages/funasr_worker",
     "packages/vad_punc_worker",
+    "packages/training_worker",
     "packages/gateway",
 ]
 
@@ -46,6 +73,13 @@ larynx-gateway = { workspace = true }
 larynx-voxcpm-worker = { workspace = true }
 larynx-funasr-worker = { workspace = true }
 larynx-vad-punc-worker = { workspace = true }
+larynx-training-worker = { workspace = true }
+# Prebuilt flash-attn wheel matching torch 2.9 + cu12 + Python 3.12
+# + cxx11 ABI=True. Forces uv to fetch this instead of building the
+# PyPI sdist from source (which on a cu13 host links against
+# libcudart.so.13 and fails at import time). See the comment in the
+# [gpu] extra above for the full story.
+flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
 
 [dependency-groups]
 dev = [
@@ -79,12 +113,18 @@ testpaths = [
     "packages/voxcpm_worker/tests",
     "packages/funasr_worker/tests",
     "packages/vad_punc_worker/tests",
+    "packages/training_worker/tests",
     "packages/shared/tests",
 ]
 # Tests that require loading the actual VoxCPM2 / Fun-ASR models on GPU.
 # Opt-in via `RUN_REAL_MODEL=1 uv run pytest -m real_model`. Default
 # `pytest` run excludes them so the mock suite stays fast.
+#
+# ``real_train`` gates the M7 end-to-end LoRA-training test (launches
+# the actual upstream training script; takes GPU time). Opt-in via
+# ``RUN_REAL_TRAIN=1``. See ORCHESTRATION-M7.md §7.
 markers = [
     "real_model: requires the real VoxCPM2 / Fun-ASR model on GPU (opt-in via RUN_REAL_MODEL=1)",
+    "real_train: requires a real LoRA training run on GPU (opt-in via RUN_REAL_TRAIN=1)",
 ]
-addopts = "-m 'not real_model'"
+addopts = "-m 'not real_model and not real_train'"

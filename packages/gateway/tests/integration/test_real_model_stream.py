@@ -26,7 +26,6 @@ import os
 import socket
 import statistics
 import time
-import uuid
 from collections.abc import AsyncIterator
 
 import numpy as np
@@ -262,9 +261,7 @@ def _wer(ref: str, hyp: str) -> float:
     for i in range(1, len(r) + 1):
         for j in range(1, len(h) + 1):
             cost = 0 if r[i - 1] == h[j - 1] else 1
-            dp[i][j] = min(
-                dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost
-            )
+            dp[i][j] = min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
     return dp[len(r)][len(h)] / len(r)
 
 
@@ -351,8 +348,7 @@ async def test_stt_stream_end_to_end_via_synthesized_audio(live_server: str) -> 
     # Partial cadence: intervals should cluster around 720ms.
     if len(partial_wall_ts) >= 2:
         intervals = [
-            partial_wall_ts[i + 1] - partial_wall_ts[i]
-            for i in range(len(partial_wall_ts) - 1)
+            partial_wall_ts[i + 1] - partial_wall_ts[i] for i in range(len(partial_wall_ts) - 1)
         ]
         median_interval = statistics.median(intervals)
         print(

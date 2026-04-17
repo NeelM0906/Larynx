@@ -105,9 +105,7 @@ def test_stt_stream_emits_start_partials_end_final(sync_client: TestClient) -> N
 
 def test_stt_stream_closes_cleanly_on_disconnect(sync_client: TestClient) -> None:
     with _connect(sync_client) as ws:
-        ws.send_json(
-            {"type": "config", "sample_rate": 16000, "chunk_interval_ms": 300}
-        )
+        ws.send_json({"type": "config", "sample_rate": 16000, "chunk_interval_ms": 300})
         ws.send_bytes(_pcm_tone(500))
     # Implicit close — the context manager exits, WS tears down. No
     # exceptions must leak across the boundary (test passes by reaching

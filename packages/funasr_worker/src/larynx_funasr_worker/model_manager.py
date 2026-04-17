@@ -417,9 +417,7 @@ class FunASRModelManager:
         try:
             mode = STTMode(raw)
         except ValueError as e:
-            raise RuntimeError(
-                f"LARYNX_STT_MODE must be 'mock' or 'funasr', got {raw!r}"
-            ) from e
+            raise RuntimeError(f"LARYNX_STT_MODE must be 'mock' or 'funasr', got {raw!r}") from e
 
         if mode is STTMode.MOCK:
             log.info("funasr.mode", mode="mock")

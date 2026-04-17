@@ -52,8 +52,8 @@ def _skip_if_disabled() -> None:
             pytest.skip(msg)
     # Fun-ASR-vllm is a repo on sys.path rather than a package; mirror the
     # lookup used by test_real_model_stream.
-    from pathlib import Path as _P
     import sys as _sys
+    from pathlib import Path as _P
 
     funasr_vllm_dir = os.environ.get(
         "LARYNX_FUNASR_VLLM_DIR", "/home/ripper/larynx-smoke/Fun-ASR-vllm"
@@ -98,6 +98,7 @@ async def live_server(tmp_path_factory: pytest.TempPathFactory) -> AsyncIterator
     os.environ.setdefault("LARYNX_LLM_DEFAULT_MODEL", "anthropic/claude-haiku-4.5")
 
     from larynx_gateway.config import get_settings
+
     get_settings.cache_clear()
 
     config = uvicorn.Config(
@@ -116,6 +117,7 @@ async def live_server(tmp_path_factory: pytest.TempPathFactory) -> AsyncIterator
             break
         if server.started:
             import httpx
+
             try:
                 async with httpx.AsyncClient(timeout=2.0) as http:
                     r = await http.get(f"http://127.0.0.1:{port}/ready")
@@ -204,8 +206,12 @@ LLM_MODELS_UNDER_TEST = [
 ]
 
 
-@pytest.mark.parametrize("model_label,model_id", LLM_MODELS_UNDER_TEST, ids=[m[0] for m in LLM_MODELS_UNDER_TEST])
-async def test_conversation_three_turn_happy_path(live_server: str, model_label: str, model_id: str) -> None:
+@pytest.mark.parametrize(
+    "model_label,model_id", LLM_MODELS_UNDER_TEST, ids=[m[0] for m in LLM_MODELS_UNDER_TEST]
+)
+async def test_conversation_three_turn_happy_path(
+    live_server: str, model_label: str, model_id: str
+) -> None:
     """Drive 3 turns, collect per-stage timings, assert p50 turn ≤ 700ms."""
     import websockets
 
@@ -272,7 +278,11 @@ async def test_conversation_three_turn_happy_path(live_server: str, model_label:
     tts_p50, tts_p95 = _p("tts_ttfb_after_llm_first_token_ms")
     e2e_p50 = int(statistics.median(turn_e2e_ms)) if turn_e2e_ms else None
     e2e_p95 = (
-        int(max(turn_e2e_ms) if len(turn_e2e_ms) < 20 else statistics.quantiles(turn_e2e_ms, n=20)[18])
+        int(
+            max(turn_e2e_ms)
+            if len(turn_e2e_ms) < 20
+            else statistics.quantiles(turn_e2e_ms, n=20)[18]
+        )
         if turn_e2e_ms
         else None
     )
@@ -286,13 +296,19 @@ async def test_conversation_three_turn_happy_path(live_server: str, model_label:
     # PRD target is p50 ≤ 700ms; 900ms is the "bad-weather" ceiling. We
     # assert a loose ceiling per-model so one flaky run doesn't abort the
     # parametrized sweep before all three models report.
-    assert len(turn_e2e_ms) == 3, f"{model_label}: expected 3 completed turns, got {len(turn_e2e_ms)}"
+    assert len(turn_e2e_ms) == 3, (
+        f"{model_label}: expected 3 completed turns, got {len(turn_e2e_ms)}"
+    )
     if e2e_p50 is not None:
         assert e2e_p50 < 2000, f"{model_label}: p50 turn latency {e2e_p50}ms well above PRD budget"
 
 
-@pytest.mark.parametrize("model_label,model_id", LLM_MODELS_UNDER_TEST, ids=[m[0] for m in LLM_MODELS_UNDER_TEST])
-async def test_conversation_barge_in_real_model(live_server: str, model_label: str, model_id: str) -> None:
+@pytest.mark.parametrize(
+    "model_label,model_id", LLM_MODELS_UNDER_TEST, ids=[m[0] for m in LLM_MODELS_UNDER_TEST]
+)
+async def test_conversation_barge_in_real_model(
+    live_server: str, model_label: str, model_id: str
+) -> None:
     """Barge-in during TTS with real audio; measure response time.
 
     Scripted: send utterance → wait for first TTS audio frame → send a

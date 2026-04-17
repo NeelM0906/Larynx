@@ -104,7 +104,7 @@ async def ws_stt_stream(ws: WebSocket) -> None:
     # Collect incoming PCM from WS into an async generator the service consumes.
     pcm_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
 
-    async def pcm_source() -> "asyncio.AsyncGenerator[bytes, None]":
+    async def pcm_source() -> asyncio.AsyncGenerator[bytes, None]:
         while True:
             item = await pcm_queue.get()
             if item is None:
@@ -151,9 +151,7 @@ async def ws_stt_stream(ws: WebSocket) -> None:
                 elif ev["type"] == "speech_end":
                     speech_end_ts["t"] = time.monotonic()
                 elif ev["type"] == "final" and "t" in speech_end_ts:
-                    _finalization_seconds.observe(
-                        time.monotonic() - speech_end_ts.pop("t")
-                    )
+                    _finalization_seconds.observe(time.monotonic() - speech_end_ts.pop("t"))
                 await ws.send_text(json.dumps(ev))
             except Exception:  # pragma: no cover — client already gone
                 return
@@ -187,9 +185,7 @@ async def ws_stt_stream(ws: WebSocket) -> None:
 
 async def _send_error(ws: WebSocket, code: str, message: str) -> None:
     try:
-        await ws.send_text(
-            json.dumps({"type": "error", "code": code, "message": message})
-        )
+        await ws.send_text(json.dumps({"type": "error", "code": code, "message": message}))
     except Exception:  # pragma: no cover
         return
     try:
