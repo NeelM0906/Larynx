@@ -7,15 +7,24 @@ dependencies = [
     "larynx-shared",
     "numpy>=1.26",
     "structlog>=24.1",
+    # librosa + soundfile are required in both real and mock mode: mock uses
+    # librosa for decoding reference audio (so encode_reference produces
+    # deterministic latents that reflect the input), soundfile writes WAV
+    # output in the design preview path.
+    "librosa>=0.10",
+    "soundfile>=0.12",
 ]
 
-# nano-vllm-voxcpm is not pinned as a hard dependency because:
-#   (a) it requires CUDA / flash-attn and won't install on CPU-only dev boxes
-#   (b) the worker transparently falls back to `mock` mode when it can't import
-# Install it manually on the GPU box:
-#   uv pip install "nano-vllm-voxcpm @ git+https://github.com/.../nano-vllm-voxcpm"
+# nano-vllm-voxcpm is an optional extra — it pulls in torch / flash-attn /
+# triton which only install on a CUDA box. Switch on via:
+#   uv sync --extra gpu
+# The worker falls back to mock mode if the import fails, so the dev flow
+# on CPU-only machines is unchanged.
 [project.optional-dependencies]
-gpu = []
+gpu = [
+    "nano-vllm-voxcpm>=2.0.0",
+    "torch>=2.5",
+]
 
 [project.scripts]
 larynx-voxcpm-worker = "larynx_voxcpm_worker.main:main"

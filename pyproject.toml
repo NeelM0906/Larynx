@@ -9,6 +9,14 @@ dependencies = [
     "larynx-gateway",
 ]
 
+[project.optional-dependencies]
+# Installs the nano-vllm-voxcpm runtime (torch + flash-attn + CUDA). Only
+# available on the GPU box. Invoke via `uv sync --extra gpu`.
+gpu = [
+    "nano-vllm-voxcpm>=2.0.0",
+    "torch>=2.5",
+]
+
 [tool.uv.workspace]
 # Add new workers here as they're built: M3 -> funasr_worker, vad_punc_worker;
 # M7 -> training_worker. The spec says `packages/*` in REPO_STRUCTURE.md; we
