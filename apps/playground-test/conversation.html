@@ -37,7 +37,7 @@
   <h1>Conversation</h1>
 
   <label>Gateway host (ws)</label>
-  <input id="host" type="text" value="ws://localhost:8000" />
+  <input id="host" type="text" placeholder="ws://localhost:8000" />
 
   <label>Bearer token</label>
   <input id="token" type="text" placeholder="LARYNX_API_TOKEN" />
@@ -83,6 +83,15 @@ const log = (...a) => {
   el.textContent += a.join(" ") + "\n";
   el.scrollTop = el.scrollHeight;
 };
+
+// Default gateway host = same origin as the page, so this HTML works
+// unmodified behind ngrok / Tailscale / any reverse proxy. Overridable
+// via the input box for developers pointing at a different gateway.
+(function () {
+  const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const defaultHost = `${scheme}//${window.location.host}`;
+  document.getElementById("host").value = defaultHost;
+})();
 const $ = (id) => document.getElementById(id);
 
 const transcriptEl = $("transcript");

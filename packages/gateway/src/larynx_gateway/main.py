@@ -12,11 +12,13 @@ Shutdown is symmetric.
 from __future__ import annotations
 
 import os
+import pathlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from larynx_funasr_worker.model_manager import FunASRModelManager
 from larynx_funasr_worker.server import WorkerServer as FunASRWorkerServer
 from larynx_vad_punc_worker.model_manager import VadPuncModelManager
@@ -190,6 +192,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from larynx_gateway.routes import openai_compat
 
     app.include_router(openai_compat.router)
+
+    # Serve the playground HTML alongside the API so a single ngrok/
+    # Tailscale tunnel can cover both origins. Paths under /playground
+    # are static HTML + JS; all API paths (/v1/*, /health, /ready) are
+    # registered above and take precedence.
+    _playground_dir = pathlib.Path(__file__).resolve().parents[4] / "apps" / "playground-test"
+    if _playground_dir.is_dir():
+        app.mount("/playground", StaticFiles(directory=_playground_dir, html=True), name="playground")
 
     return app
 
