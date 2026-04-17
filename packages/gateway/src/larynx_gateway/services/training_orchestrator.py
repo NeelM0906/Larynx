@@ -40,6 +40,7 @@ from larynx_training_worker.config_builder import (
 from larynx_training_worker.dataset_prep import (
     auto_transcribe_if_missing,
     validate_dataset_phase_a,
+    validate_transcripts_phase_b,
 )
 from larynx_training_worker.subprocess_runner import (
     RunnerOutcome,
@@ -164,6 +165,32 @@ async def run_job(
                     error_detail=str(e),
                 )
                 return JobRunResult.FAILED
+
+        # Phase B — advisory transcript-quality check. Runs only if we
+        # have both a manifest and an ASR hook; its report is written
+        # to ``validation_report.json`` in the dataset dir but never
+        # blocks the job (ORCHESTRATION-M7.md §2.2).
+        try:
+            config_overrides_dict = json.loads(job.config_json or "{}")
+        except json.JSONDecodeError:
+            config_overrides_dict = {}
+        validate_transcripts = bool(config_overrides_dict.get("validate_transcripts", True))
+        if transcribe_hook is not None and validate_transcripts and dataset_paths.has_transcripts():
+            try:
+                phase_b = await validate_transcripts_phase_b(
+                    dataset_paths, transcribe=transcribe_hook
+                )
+                log.info(
+                    "training.phase_b_done",
+                    job_id=job_id,
+                    num_samples=phase_b.num_samples,
+                    suspects=len(phase_b.suspects),
+                )
+            except Exception as e:  # noqa: BLE001
+                # Phase B is advisory — a failure here logs but doesn't
+                # fail the job. The UI just won't have a report to
+                # display.
+                log.warning("training.phase_b_failed", job_id=job_id, error=str(e))
 
         try:
             overrides = json.loads(job.config_json or "{}")

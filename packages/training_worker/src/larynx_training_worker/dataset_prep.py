@@ -15,6 +15,9 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
+import random
+import re
+import string
 from collections.abc import Awaitable, Callable
 
 import numpy as np
@@ -261,6 +264,164 @@ def _validate_transcripts(
 
 
 TranscribeHook = Callable[[bytes, int], Awaitable[str]]
+
+
+# ---------------------------------------------------------------------------
+# Phase B — advisory transcript-quality sanity check
+# ---------------------------------------------------------------------------
+
+
+class PhaseBSuspect(BaseModel):
+    """One sample flagged by Phase B for human review."""
+
+    audio_path: str
+    reference: str
+    hypothesis: str
+    wer: float
+
+
+class PhaseBReport(BaseModel):
+    num_samples: int
+    subset_fraction: float
+    max_samples: int
+    wer_threshold: float
+    seed: int
+    suspects: list[PhaseBSuspect] = Field(default_factory=list)
+
+
+# Preserve apostrophes and internal hyphens — "it's" and "well-being"
+# are meaningful tokens in English ASR evaluation. Strip everything
+# else in string.punctuation.
+_STRIP_PUNCT = "".join(c for c in string.punctuation if c not in "'-")
+_PUNCT_STRIP = str.maketrans("", "", _STRIP_PUNCT)
+
+
+def normalise_transcript(text: str) -> str:
+    """Lowercase + strip most ASCII punctuation + collapse whitespace."""
+    lowered = text.lower().translate(_PUNCT_STRIP)
+    return re.sub(r"\s+", " ", lowered).strip()
+
+
+def word_error_rate(reference: str, hypothesis: str) -> float:
+    """Plain word-level WER via Levenshtein distance.
+
+    Convention: empty reference + empty hypothesis -> 0.0 (nothing was
+    wrong). Empty reference + non-empty hypothesis -> 1.0 (entirely
+    wrong by insertion). Otherwise, edit distance / len(reference).
+    """
+    ref = reference.split()
+    hyp = hypothesis.split()
+    if not ref and not hyp:
+        return 0.0
+    if not ref:
+        return 1.0
+    # DP table of shape (len(ref)+1, len(hyp)+1).
+    m, n = len(ref), len(hyp)
+    prev = list(range(n + 1))
+    for i in range(1, m + 1):
+        cur = [i] + [0] * n
+        for j in range(1, n + 1):
+            cost = 0 if ref[i - 1] == hyp[j - 1] else 1
+            cur[j] = min(
+                prev[j] + 1,  # deletion
+                cur[j - 1] + 1,  # insertion
+                prev[j - 1] + cost,  # substitution / match
+            )
+        prev = cur
+    return prev[n] / m
+
+
+async def validate_transcripts_phase_b(
+    dataset: DatasetPaths,
+    *,
+    transcribe: TranscribeHook,
+    subset_fraction: float = 0.05,
+    max_samples: int = 20,
+    wer_threshold: float = 0.4,
+    seed: int = 0,
+) -> PhaseBReport:
+    """Advisory WER check against Fun-ASR (ORCHESTRATION-M7.md §2.2).
+
+    Non-blocking: returns a report, writes ``validation_report.json``
+    to the dataset dir. Caller decides whether suspects block the job
+    (the UI shows them; the orchestrator runs regardless).
+
+    ``subset_fraction`` is a fraction of rows to sample; ``max_samples``
+    caps the absolute count. ``seed`` pins the random sample order so a
+    re-run of Phase B produces the same subset (reproducibility).
+    """
+    if not dataset.has_transcripts():
+        report = PhaseBReport(
+            num_samples=0,
+            subset_fraction=subset_fraction,
+            max_samples=max_samples,
+            wer_threshold=wer_threshold,
+            seed=seed,
+        )
+        dataset.validation_report_json.parent.mkdir(parents=True, exist_ok=True)
+        dataset.validation_report_json.write_text(
+            report.model_dump_json(indent=2), encoding="utf-8"
+        )
+        return report
+
+    rows = []
+    with dataset.transcripts_jsonl.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    if not rows:
+        report = PhaseBReport(
+            num_samples=0,
+            subset_fraction=subset_fraction,
+            max_samples=max_samples,
+            wer_threshold=wer_threshold,
+            seed=seed,
+        )
+    else:
+        target_count = min(max_samples, max(1, int(len(rows) * subset_fraction)))
+        rng = random.Random(seed)
+        picks = rng.sample(rows, k=min(target_count, len(rows)))
+
+        suspects: list[PhaseBSuspect] = []
+        for row in picks:
+            audio = row.get("audio", "")
+            reference = row.get("text", "")
+            path = _resolve_manifest_audio(dataset, audio)
+            try:
+                pcm, sr = _load_as_16k_s16_pcm(path)
+                hypothesis = await transcribe(pcm, sr)
+            except Exception as e:  # noqa: BLE001
+                _log.warning("phase_b.transcribe_failed audio=%s error=%s", path, e)
+                continue
+            wer = word_error_rate(normalise_transcript(reference), normalise_transcript(hypothesis))
+            if wer > wer_threshold:
+                suspects.append(
+                    PhaseBSuspect(
+                        audio_path=str(path),
+                        reference=reference,
+                        hypothesis=hypothesis,
+                        wer=round(wer, 4),
+                    )
+                )
+
+        report = PhaseBReport(
+            num_samples=len(picks),
+            subset_fraction=subset_fraction,
+            max_samples=max_samples,
+            wer_threshold=wer_threshold,
+            seed=seed,
+            suspects=suspects,
+        )
+
+    dataset.validation_report_json.parent.mkdir(parents=True, exist_ok=True)
+    dataset.validation_report_json.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+    return report
 
 
 async def auto_transcribe_if_missing(
