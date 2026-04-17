@@ -124,6 +124,16 @@ async def real_client(data_dir: pathlib.Path) -> AsyncIterator[AsyncClient]:
     os.environ["LARYNX_TTS_MODE"] = "voxcpm"
     # Loosen Phase A's duration gate for a 40s smoke dataset.
     os.environ.setdefault("LARYNX_FT_MIN_SECONDS", "30")
+    # Point the subprocess runner at third_party/VoxCPM's src so the
+    # upstream training script can ``import voxcpm.*`` without
+    # installing voxcpm into our main venv (preserves
+    # ORCHESTRATION-M7.md §0).
+    os.environ["LARYNX_VOXCPM_SRC_DIR"] = str(
+        pathlib.Path(__file__).resolve().parents[4]
+        / "third_party"
+        / "VoxCPM"
+        / "src"
+    )
     get_settings.cache_clear()
     app = create_app()
     # Pretrained path in the HF cache snapshot directory.

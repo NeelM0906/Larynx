@@ -119,6 +119,20 @@ async def run_training_subprocess(
     env = dict(os.environ)
     env.setdefault("CUDA_VISIBLE_DEVICES", "0")
     env["TOKENIZERS_PARALLELISM"] = "false"
+
+    # PYTHONPATH scope: the subprocess — not our code — imports from
+    # third_party/VoxCPM's ``src/voxcpm/`` package. We inject the src
+    # dir on the subprocess env only, so the gateway process stays
+    # clean of upstream voxcpm imports (ORCHESTRATION-M7.md §0).
+    # Caller passes ``third_party_voxcpm_src`` via ``extra_env`` when
+    # it wants this wiring; we compute a sensible default below.
+    voxcpm_src = env.get("LARYNX_VOXCPM_SRC_DIR")
+    if voxcpm_src and pathlib.Path(voxcpm_src).is_dir():
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = (
+            f"{voxcpm_src}:{existing}" if existing else voxcpm_src
+        )
+
     if extra_env:
         env.update(extra_env)
 
