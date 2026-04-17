@@ -100,7 +100,6 @@ def live_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str
     os.environ["REDIS_URL"] = TEST_REDIS_URL
 
     import uvicorn
-
     from larynx_gateway.config import get_settings
     from larynx_gateway.main import create_app
 
@@ -208,5 +207,3 @@ def seed_voice_alloy(live_gateway: tuple[str, str]) -> str:
     )
     u.raise_for_status()
     return u.json()["id"]
-
-
