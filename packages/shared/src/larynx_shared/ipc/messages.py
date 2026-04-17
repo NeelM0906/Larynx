@@ -179,3 +179,140 @@ class EncodeReferenceResponse(ResponseMessage):
     @field_serializer("latents", when_used="json")
     def _ser_latents(self, v: bytes) -> str:
         return base64.b64encode(v).decode("ascii")
+
+
+# ---------------------------------------------------------------------------
+# STT — transcription
+#
+# Audio travels as int16 LE PCM at ``sample_rate`` (typically 16 kHz mono).
+# Callers resample upstream so the worker never has to branch on format.
+# ``language`` is an ISO-639 code (e.g. "en", "zh", "pt"); the worker maps
+# it to Fun-ASR's Chinese-name convention and chooses Nano vs MLT via
+# ``language_router``.
+# ---------------------------------------------------------------------------
+
+
+class TranscribeRequest(RequestMessage):
+    kind: Literal["transcribe"] = "transcribe"
+    pcm_s16le: bytes
+    sample_rate: int = 16000
+    language: str | None = None  # ISO-639 code, None = auto-detect (Nano)
+    hotwords: list[str] = Field(default_factory=list)
+    itn: bool = True
+
+    @field_validator("pcm_s16le", mode="before")
+    @classmethod
+    def _decode_pcm(cls, v: object) -> bytes:
+        out = _coerce_bytes(v)
+        if out is None:
+            raise ValueError("pcm_s16le must not be null")
+        return out
+
+    @field_serializer("pcm_s16le", when_used="json")
+    def _ser_pcm(self, v: bytes) -> str:
+        return base64.b64encode(v).decode("ascii")
+
+
+class TranscribeResponse(ResponseMessage):
+    kind: Literal["transcribe"] = "transcribe"
+    text: str
+    # ISO-639 code that was actually used. Either echoes the caller's
+    # ``language`` or — when ``language`` was None — reports what Fun-ASR
+    # auto-detected (best-effort; Fun-ASR-Nano does not always tag output).
+    language: str
+    model_used: Literal["nano", "mlt"]
+
+
+class TranscribeRollingRequest(RequestMessage):
+    """Streaming rolling-buffer decode (see PRD §5.4).
+
+    Each intermediate call passes the growing audio buffer + the previous
+    partial as ``prev_text`` for context continuity. When ``is_final`` is
+    False the worker drops the last ``drop_tail_tokens`` tokens from the
+    result (they're the ones most likely to be revised). When True, the
+    full decode is returned.
+    """
+
+    kind: Literal["transcribe_rolling"] = "transcribe_rolling"
+    pcm_s16le: bytes
+    sample_rate: int = 16000
+    language: str | None = None
+    hotwords: list[str] = Field(default_factory=list)
+    itn: bool = True
+    prev_text: str = ""
+    is_final: bool = False
+    drop_tail_tokens: int = 5
+
+    @field_validator("pcm_s16le", mode="before")
+    @classmethod
+    def _decode_pcm(cls, v: object) -> bytes:
+        out = _coerce_bytes(v)
+        if out is None:
+            raise ValueError("pcm_s16le must not be null")
+        return out
+
+    @field_serializer("pcm_s16le", when_used="json")
+    def _ser_pcm(self, v: bytes) -> str:
+        return base64.b64encode(v).decode("ascii")
+
+
+class TranscribeRollingResponse(ResponseMessage):
+    kind: Literal["transcribe_rolling"] = "transcribe_rolling"
+    text: str
+    language: str
+    model_used: Literal["nano", "mlt"]
+    is_final: bool
+
+
+# ---------------------------------------------------------------------------
+# VAD + Punctuation — handled by the CPU worker (vad_punc_worker)
+# ---------------------------------------------------------------------------
+
+
+class DetectSegmentsRequest(RequestMessage):
+    """Run fsmn-vad over the audio and return voiced regions."""
+
+    kind: Literal["detect_segments"] = "detect_segments"
+    pcm_s16le: bytes
+    sample_rate: int = 16000
+
+    @field_validator("pcm_s16le", mode="before")
+    @classmethod
+    def _decode_pcm(cls, v: object) -> bytes:
+        out = _coerce_bytes(v)
+        if out is None:
+            raise ValueError("pcm_s16le must not be null")
+        return out
+
+    @field_serializer("pcm_s16le", when_used="json")
+    def _ser_pcm(self, v: bytes) -> str:
+        return base64.b64encode(v).decode("ascii")
+
+
+class Segment(BaseModel):
+    start_ms: int
+    end_ms: int
+    is_speech: bool = True
+
+
+class DetectSegmentsResponse(ResponseMessage):
+    kind: Literal["detect_segments"] = "detect_segments"
+    segments: list[Segment]
+
+
+class PunctuateRequest(RequestMessage):
+    kind: Literal["punctuate"] = "punctuate"
+    text: str
+    # ISO-639; used to short-circuit languages that ct-punc can't handle
+    # (anything outside zh/en). Caller may pass None — worker defaults to
+    # "en" behaviour (pass-through when ct-punc adds nothing).
+    language: str | None = None
+
+
+class PunctuateResponse(ResponseMessage):
+    kind: Literal["punctuate"] = "punctuate"
+    text: str
+    # Echoes whether punctuation was actually applied (False when the
+    # language was outside ct-punc's supported set — Fun-ASR's itn=True
+    # output is already punctuated in-line for MLT languages).
+    applied: bool
