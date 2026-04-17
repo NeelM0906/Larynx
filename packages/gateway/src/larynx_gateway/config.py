@@ -82,6 +82,11 @@ class Settings(BaseSettings):
     # help once the worker queue becomes the bottleneck.
     larynx_batch_consumers: int = 2
 
+    # Daily cleanup cron — 24h in prod; tests override via
+    # app.state.cleanup_interval_s to drive the sweep synchronously.
+    larynx_cleanup_interval_s: int = 86400
+    larynx_cleanup_initial_delay_s: int = 60
+
     # Logging
     larynx_log_level: str = "INFO"
     larynx_log_json: bool = True
