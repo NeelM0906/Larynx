@@ -32,6 +32,14 @@ uv.lock.bak
 *.mp3
 !packages/gateway/tests/fixtures/*.wav
 
+# Local session state — Claude Code plugin cache + scratch clones.
+# Never belongs in the repo; each developer's state is their own.
+/.claude/
+/my-clone/
+
+# Soak harness outputs — generated per run, not committed.
+/soak-artifacts/
+
 # Editor
 .vscode/
 .idea/
