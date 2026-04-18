@@ -30,7 +30,10 @@ from larynx_voxcpm_worker.server import WorkerServer
 from larynx_gateway.config import Settings, get_settings
 from larynx_gateway.db.session import dispose_engine, get_session, init_engine
 from larynx_gateway.logging import configure_logging
+from larynx_gateway.middleware.body_limits import BodySizeLimitMiddleware
+from larynx_gateway.middleware.metrics import PrometheusMiddleware
 from larynx_gateway.routes import (
+    batch,
     conversation,
     finetune,
     health,
@@ -40,11 +43,17 @@ from larynx_gateway.routes import (
     tts_stream,
     voices,
 )
+from larynx_gateway.routes import (
+    metrics as metrics_route,
+)
+from larynx_gateway.services.batch_queue import BatchQueue
 from larynx_gateway.services.boot_reconcile import load_lora_voices, reap_orphan_jobs
 from larynx_gateway.services.latent_cache import LatentCache, build_redis_client
 from larynx_gateway.services.llm_client import LLMClient
 from larynx_gateway.services.training_logs import TrainingLogStore
 from larynx_gateway.services.voice_files import resolve_data_dir
+from larynx_gateway.workers.batch_worker import BatchWorkerDeps, run_consumer
+from larynx_gateway.workers.cleanup_cron import run_cleanup_cron
 from larynx_gateway.workers_client.base import WorkerChannel
 from larynx_gateway.workers_client.funasr_client import FunASRClient
 from larynx_gateway.workers_client.vad_punc_client import VadPuncClient
@@ -163,6 +172,50 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.llm_client = llm_client
     app.state.llm_default_model = settings.larynx_llm_default_model
 
+    # M8 batch queue + consumer tasks. Start AFTER voxcpm_client is
+    # ready because consumers call through the shared client. Two
+    # consumers, bounded per ORCHESTRATION-M8.md §0 so real-time TTS
+    # never starves.
+    batch_queue = BatchQueue(redis_client)
+    batch_shutdown = asyncio.Event()
+    app.state.batch_queue = batch_queue
+    app.state.batch_shutdown_event = batch_shutdown
+    if settings.larynx_batch_enabled:
+        deps = BatchWorkerDeps(
+            queue=batch_queue,
+            voxcpm=client,
+            data_dir=data_dir,
+            shutdown_event=batch_shutdown,
+        )
+        app.state.batch_consumers = [
+            asyncio.create_task(
+                run_consumer(deps, i, latent_cache, settings.larynx_voice_design_ttl_s),
+                name=f"batch-consumer-{i}",
+            )
+            for i in range(settings.larynx_batch_consumers)
+        ]
+    else:
+        app.state.batch_consumers = []
+
+    # Daily cleanup cron — runs inside the gateway process on a plain
+    # asyncio sleep timer. Picks up at boot + then every 24h. Tests
+    # can inject a short-interval hook via app.state.
+    cleanup_interval_s = getattr(
+        app.state, "cleanup_interval_s", settings.larynx_cleanup_interval_s
+    )
+    cleanup_initial_delay_s = getattr(
+        app.state, "cleanup_initial_delay_s", settings.larynx_cleanup_initial_delay_s
+    )
+    app.state.cleanup_task = asyncio.create_task(
+        run_cleanup_cron(
+            data_dir,
+            batch_shutdown,
+            interval_s=cleanup_interval_s,
+            initial_delay_s=cleanup_initial_delay_s,
+        ),
+        name="cleanup-cron",
+    )
+
     app.state.worker_ready = True
 
     log.info(
@@ -180,6 +233,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         app.state.worker_ready = False
+        app.state.shutting_down = True
+        # Signal batch consumers + cleanup cron first, then give them a
+        # bounded grace period to drain before we tear down the
+        # voxcpm_client they depend on. 30s cap per PRD §7.
+        batch_shutdown.set()
+        consumers = getattr(app.state, "batch_consumers", [])
+        cleanup_task = getattr(app.state, "cleanup_task", None)
+        drainables: list[asyncio.Task] = list(consumers)
+        if cleanup_task is not None:
+            drainables.append(cleanup_task)
+        if drainables:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*drainables, return_exceptions=True), timeout=30
+                )
+            except TimeoutError:
+                log.warning("batch.consumers_drain_timeout")
+                for t in drainables:
+                    t.cancel()
         await worker.stop()
         await client.stop()
         await funasr_worker.stop()
@@ -207,8 +279,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.worker_ready = False
+    app.state.shutting_down = False
+
+    # Metrics first (so errors raised by downstream middleware are
+    # still counted), then body-size cap (so oversized payloads are
+    # rejected without going through any route-specific parsing).
+    app.add_middleware(BodySizeLimitMiddleware)
+    app.add_middleware(PrometheusMiddleware)
 
     app.include_router(health.router)
+    app.include_router(metrics_route.router)
     app.include_router(tts.router)
     app.include_router(tts_stream.router)
     app.include_router(voices.router)
@@ -216,6 +296,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(stt_stream.router)
     app.include_router(conversation.router)
     app.include_router(finetune.router)
+    app.include_router(batch.router)
     from larynx_gateway.routes import openai_compat
 
     app.include_router(openai_compat.router)

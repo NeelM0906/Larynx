@@ -111,6 +111,9 @@ class _WSSink:
 @router.websocket("/conversation")
 async def ws_conversation(ws: WebSocket) -> None:
     await ws.accept()
+    if getattr(ws.app.state, "shutting_down", False):
+        await _send_error(ws, "shutting_down", "gateway is draining")
+        return
     if not await require_ws_bearer_token(ws):
         return
 

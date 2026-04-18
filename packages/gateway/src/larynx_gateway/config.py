@@ -73,6 +73,20 @@ class Settings(BaseSettings):
     # smoke test is the only reason to deviate.
     larynx_ft_min_seconds: int = 300
 
+    # M8 batch TTS. Disabling via env var refuses new submissions
+    # (existing /v1/tts + conversation paths are untouched) — useful
+    # as a kill switch if the consumer OOMs in production.
+    larynx_batch_enabled: bool = True
+    # Number of in-process consumer tasks. 2 keeps real-time TTS
+    # unstarved on our single VoxCPM2 instance; higher values only
+    # help once the worker queue becomes the bottleneck.
+    larynx_batch_consumers: int = 2
+
+    # Daily cleanup cron — 24h in prod; tests override via
+    # app.state.cleanup_interval_s to drive the sweep synchronously.
+    larynx_cleanup_interval_s: int = 86400
+    larynx_cleanup_initial_delay_s: int = 60
+
     # Logging
     larynx_log_level: str = "INFO"
     larynx_log_json: bool = True

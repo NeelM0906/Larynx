@@ -84,6 +84,11 @@ def _reset_test_db() -> None:
         # there's no DB-level FK, but this is the logical direction).
         conn.execute(text("TRUNCATE TABLE voices RESTART IDENTITY CASCADE"))
         conn.execute(text("TRUNCATE TABLE fine_tune_jobs RESTART IDENTITY CASCADE"))
+        # batch_items is CASCADE'd by the batch_jobs truncate via the FK
+        # but we truncate it explicitly too so a bug that ever drops the
+        # FK doesn't leave stale rows between tests.
+        conn.execute(text("TRUNCATE TABLE batch_jobs RESTART IDENTITY CASCADE"))
+        conn.execute(text("TRUNCATE TABLE batch_items RESTART IDENTITY CASCADE"))
     eng.dispose()
 
 

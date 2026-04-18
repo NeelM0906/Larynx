@@ -142,8 +142,10 @@ async def test_voice_source_lora_round_trip(session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_migration_head_is_0003(session) -> None:
-    # The current migration head must be the M7 revision. This catches
-    # "someone forgot to add a new revision downstream of 0003" drift.
+async def test_migration_head_is_latest(session) -> None:
+    # The current migration head must be the latest revision in the
+    # tree. Catches "someone forgot to add a new revision downstream
+    # of the current head" drift. Update this string every time a new
+    # alembic revision lands.
     row = (await session.execute(text("SELECT version_num FROM alembic_version"))).scalar_one()
-    assert row == "0003_finetune_artifacts"
+    assert row == "0004_batch_jobs"
