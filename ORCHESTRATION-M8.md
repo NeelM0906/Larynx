@@ -121,45 +121,41 @@ reference-audio uploads in batch — use an existing `voice_id`.
 
 ### 1.3 Queueing
 
-Add two new dependencies to `larynx-gateway`: `arq>=0.25`.
-
-New file `packages/gateway/src/larynx_gateway/services/batch_queue.py`:
-
-```python
-class BatchQueue:
-    """Arq producer — enqueues one job per BatchItem under the
-    ``larynx:batch`` queue name. Returns an Arq job_id used to trace."""
-    async def enqueue_item(self, *, batch_job_id, item_idx): ...
-    async def cancel_job(self, *, batch_job_id): ...   # deletes queued items
-```
+No new deps — built on the existing Redis client. Arq was the original
+plan but adds a separate worker lifecycle + cron-event-loop machinery
+we don't need for v1 (one queue + one daily cleanup). A minimal
+Redis-list-based queue is ~100 lines and gives us the same durability
+(jobs survive gateway restart via the existing Redis instance).
 
 Queue layout:
 
-- `larynx:batch` — Arq queue for batch items. `job_timeout=600`,
-  `max_tries=2`, `queue_read_limit=2` per worker so a single batch can't
-  saturate.
-- `larynx:cron` — Arq queue for the daily cleanup cron (§3.5).
+- Redis list `larynx:batch:queue` — each entry is a `"{job_id}:{idx}"`
+  string. Items are `LPUSH`'d by the create route and `BRPOP`'d by
+  consumer tasks with a 1s timeout (so shutdown drain notices the
+  event flag promptly).
+- Redis set `larynx:batch:cancelled` — job_ids with a pending cancel.
+  Consumer checks membership after BRPOP; matching items are recorded
+  as CANCELLED and skipped.
 
-Two Arq workers run in-process inside the gateway container under
-supervisord (§3.3):
+Consumer layout:
 
-```
-[program:batch_worker]  — runs arq larynx_gateway.workers.batch_worker
-[program:cron_worker]   — runs arq larynx_gateway.workers.cron_worker
-```
+- Gateway lifespan starts **2 consumer tasks** (bounded by the §0
+  real-time-starvation rule). Each task loops `BRPOP` → lookup job/item
+  → check cancel-set → run synthesis via the already-loaded
+  `voxcpm_client` from `app.state` → persist artifact + row.
+- Consumers share the process with the gateway — no second process,
+  no loopback route, no shared-secret. The `asyncio.Semaphore(2)`
+  implicit in having 2 consumers is the starvation guard; real-time
+  `/v1/tts` calls share the same VoxCPMClient and the worker-side IPC
+  queue interleaves them fairly.
+- Graceful shutdown: lifespan teardown sets `app.state.shutdown_event`.
+  Consumers observe it on the next BRPOP timeout, finish the current
+  item if one is in flight, and exit within 1s (plus current-item
+  drain time, capped at 30s via the §3.7 shield).
 
-The batch worker imports `VoxCPMClient` via a thin HTTP loopback — the
-gateway exposes an internal `POST /internal/batch_synth` that the Arq
-worker calls. This avoids duplicating model-loading in a second process
-and keeps the batch worker stateless. The internal route requires a
-shared-secret header (`X-Internal-Token`, settings-backed; random per
-boot if unset) so external callers can't reach it.
-
-*Why not call `VoxCPMClient` directly from the Arq worker?* The worker
-runs in its own process; loading a second voxcpm manager would double the
-GPU footprint. Treat the batch worker as a thin scheduler that fans item
-jobs back into the gateway's real-time synthesis path, which is already
-bounded by the semaphore in §0.
+If cron needs grow in v1.1+ (multi-day jobs, retry backoff, dead-letter
+queues), this becomes an Arq swap — the queue interface in
+`batch_queue.py` is small enough that the call sites don't care.
 
 ### 1.4 State machine
 
