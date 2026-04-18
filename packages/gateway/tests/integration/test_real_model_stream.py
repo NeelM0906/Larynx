@@ -456,13 +456,15 @@ async def test_stt_stream_four_concurrent_sessions(live_server: str) -> None:
         )
         all_intervals.extend(intervals)
 
-    # Minimum structural expectation — the system didn't deadlock. If
-    # fun-asr-vllm were truly batching, we'd expect ~720ms cadence; if it
-    # serialises (as observed in M4 on this hardware), cadence stretches
-    # but each session should still complete and produce a final.
+    # After bugs/001's inference lock, all four sessions must complete.
+    # Pre-fix this was `>= 2` (best-effort — we knew 3 of 4 deadlocked);
+    # post-fix the backend serialises cleanly so every session finishes.
+    # Keep the `>=` form rather than `==` so the assertion stays honest
+    # if N is ever raised — "at least this many must succeed" scales,
+    # "exactly this many" doesn't.
     successful = [item for item in results if not isinstance(item, BaseException)]
-    assert len(successful) >= 2, (
-        f"expected ≥ 2 concurrent sessions to complete, got {len(successful)}"
+    assert len(successful) >= 4, (
+        f"expected ≥ 4 concurrent sessions to complete, got {len(successful)}"
     )
 
     if all_intervals:
@@ -494,10 +496,6 @@ async def test_stt_stream_four_concurrent_sessions(live_server: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="bugs/001 — concurrent inference deadlocks without backend lock",
-)
 async def test_stt_concurrent_transcribe_rolling_does_not_deadlock(
     live_server: str,
 ) -> None:

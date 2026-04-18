@@ -298,10 +298,6 @@ async def test_partial_ordinal_matches_enclosing_utterance() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason="bugs/001 — run() finally raises RuntimeError when clients are stopped mid-session",
-)
 async def test_stt_stream_run_finally_tolerates_stopped_client() -> None:
     funasr, vad, to_close = await _spin_up_workers()
     try:
