@@ -480,3 +480,68 @@ async def test_stt_stream_four_concurrent_sessions(live_server: str) -> None:
         # reported so the team can decide whether to accept concurrent STT
         # behaviour as-is or to build a batching coalescer in the worker.
         # (See PRD §10: "Fun-ASR rolling-buffer efficiency" risk.)
+
+
+# ---------------------------------------------------------------------------
+# bugs/001 regression — concurrent transcribe_rolling must not deadlock
+#
+# This test exercises the primary bug without the WS layer. It pokes the
+# process-wide FunASRClient directly with four concurrent transcribe_rolling
+# calls and asserts all four return. Before the fix they deadlock: vLLM's
+# shared LLM instance can't absorb concurrent .inference() calls from
+# multiple asyncio.to_thread worker threads, and 3 of 4 hang indefinitely.
+# See bugs/001_concurrent_stt.md § 2.2 for the evidence trail.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="bugs/001 — concurrent inference deadlocks without backend lock",
+)
+async def test_stt_concurrent_transcribe_rolling_does_not_deadlock(
+    live_server: str,
+) -> None:
+    # Reach through to the live gateway's shared FunASRClient so we're
+    # hitting the exact same client instance WS sessions share. The
+    # larynx_gateway.main module exposes `app` at module scope; the
+    # live_server fixture's uvicorn run populates app.state during lifespan.
+    from larynx_gateway.main import app
+
+    funasr_client = app.state.funasr_client
+    assert funasr_client is not None, (
+        "app.state.funasr_client missing — lifespan didn't populate it?"
+    )
+
+    # Synthesize a known-good short sample via the real TTS path.
+    phrase = "Testing concurrent inference race condition."
+    wav = await _tts_request(live_server, phrase, sample_rate=24000)
+    pcm = _wav_to_pcm16_16k(wav)
+
+    async def one_call() -> str:
+        r = await funasr_client.transcribe_rolling(
+            pcm_s16le=pcm,
+            sample_rate=16000,
+            language="en",
+            hotwords=[],
+            itn=True,
+            prev_text="",
+            is_final=True,
+            drop_tail_tokens=5,
+        )
+        return r.text
+
+    # Warm the backend with one serial call so cold-model cost doesn't
+    # contaminate the concurrency measurement.
+    warm_text = await one_call()
+    assert warm_text, f"warm-up decode produced empty text for {phrase!r}"
+
+    # Four concurrent calls must all complete within 30s. Today they
+    # deadlock and this wait_for expires.
+    results = await asyncio.wait_for(
+        asyncio.gather(*(one_call() for _ in range(4)), return_exceptions=True),
+        timeout=30.0,
+    )
+    errors = [r for r in results if isinstance(r, BaseException)]
+    assert not errors, f"concurrent calls raised: {errors}"
+    for i, text in enumerate(results):
+        assert text, f"concurrent call #{i} produced empty text: {results!r}"
