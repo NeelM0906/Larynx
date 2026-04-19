@@ -6,10 +6,6 @@ subprocesses under the current interpreter's env, parses the transcript
 out of smoke_stt.py's stdout, and asserts WER ≤ 0.2 against the
 synthesised phrase.
 
-Pre-fix, the test is expected to fail because smoke_tts.py writes the
-WAV at 16 kHz even though VoxCPM2's native output is 48 kHz (see
-bugs/003 §5-§6). Post-fix, it passes.
-
 Gated `@pytest.mark.real_model` (and `RUN_REAL_MODEL=1`) — model load
 alone is ~230 s cold, so this is kept off the default CI lane.
 """
@@ -62,14 +58,6 @@ def _run_m0(script: str) -> str:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "bugs/003 — smoke_tts.py writes WAV at 16 kHz via a getattr() fallback, "
-        "but VoxCPM2 native output is 48 kHz. Fun-ASR's frontend trusts the "
-        "header, sees 3× slowed audio, hallucinates garbled English."
-    ),
-)
 def test_m0_smoke_roundtrip_under_20pct_wer() -> None:
     _skip_if_disabled()
     _run_m0("smoke_tts.py")
