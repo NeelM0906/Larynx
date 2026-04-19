@@ -689,3 +689,99 @@ fails in commit 21, subsequent patch commits follow before v1 declare.
   still work. The dep is marked required in pyproject but the import is
   wrapped so a broken install in staging doesn't take down the whole
   gateway.
+
+---
+
+## 7. Amendments (post-implementation)
+
+Everything above is the design as reviewed and approved. The
+subsections below are corrections and descoping decisions applied
+after Parts A–C shipped and before Part D. They are recorded here
+(rather than rewritten in-place) so a future reader can tell which
+parts are original design and which are drift from what actually
+landed or got cut.
+
+### 7.1 §1.7 file list — Arq references are stale
+
+§1.3 pivoted the batch queue from Arq to a Redis-list-based in-gateway
+consumer pattern. The §1.7 file list and §5.2 commit sequence were
+not updated to reflect that pivot. The list as written referenced:
+
+- `workers/batch_worker.py (Arq WorkerSettings)`
+- `workers/cron_worker.py (Arq cron)`
+- `routes/internal_batch.py (loopback endpoint)`
+- `+ arq in pyproject.toml`
+- `+ arq in top-level deps: arq, pyav, openai-dev`
+
+What actually shipped (verify against `origin/main`):
+
+- `packages/gateway/src/larynx_gateway/workers/batch_worker.py` —
+  two asyncio consumer tasks started by the gateway lifespan. No
+  WorkerSettings, no separate process. Shares the in-process
+  `VoxCPMClient` with the real-time path per §0 invariant.
+- `packages/gateway/src/larynx_gateway/workers/cleanup_cron.py` —
+  `asyncio.sleep`-based daily timer inside the gateway lifespan.
+  No Arq cron.
+- `packages/gateway/src/larynx_gateway/services/batch_cleanup.py` —
+  the SQL + filesystem sweep the cron calls into.
+- `routes/internal_batch.py` — **not shipped**. Batch consumers
+  invoke `voxcpm_client.synthesize(...)` directly. No loopback,
+  no shared-secret auth.
+- `pyproject.toml` — **arq not added**. Only `pyav` landed (gateway
+  dep) and `openai` landed (dev extra).
+
+The §1.3 pivot was made pre-implementation on correctness grounds;
+the §1.7 mismatch was pure doc-hygiene lag.
+
+### 7.2 §3.1 training_worker metrics endpoint — discrepancy with arch
+
+§3.1's table lists `training_worker` at `:9104/metrics` as a
+persistent HTTP endpoint. This doesn't match what actually runs:
+`training_worker` is a subprocess orchestrator invoked on-demand by
+the gateway (see `services/training_orchestrator.py` +
+`packages/training_worker/src/larynx_training_worker/subprocess_runner.py`).
+There is no long-running training daemon, so there is no port to
+bind a metrics sidecar to.
+
+v1 resolution:
+- No `metrics_server.py` for `training_worker`. The package ships
+  only `config_builder`, `dataset_prep`, and `subprocess_runner` —
+  all consumed from the gateway process's own event loop.
+- Training activity surfaces through the gateway's existing
+  `larynx_training_step_duration_seconds` histogram, which is
+  recorded from `training_orchestrator` as phases progress. This
+  histogram already exists; no new wiring needed.
+- The gateway's `/metrics/workers` proxy (§3.1) scrapes only the
+  two persistent worker sidecars — `funasr_worker` at :9101 and
+  `vad_punc_worker` at :9102. `voxcpm_worker` is also excluded
+  because it runs in-process inside the gateway (same rationale:
+  there's no separate URL to scrape; its counters are emitted
+  through the gateway's own `/metrics`).
+
+### 7.3 §4 — 24h soak descoped from v1
+
+Per product decision on **2026-04-18**, the 24-hour soak described in
+§4 is descoped from v1. The verification bar for Part C shifts to a
+bounded-duration staging verification covering the hardening
+invariants that would fail within the first hour of production
+(graceful drain, restart alerter, gross memory leaks, Part C
+metrics surfaces), not the long-horizon regressions a 24h run would
+catch.
+
+- `scripts/soak_test.py` + `scripts/soak_utils/*` remain in the repo
+  as a load-generation primitive, re-used by the staging
+  verification harness.
+- `SOAK_REPORT.md` is not generated for v1; the template stays in
+  the repo as-is.
+- Replacement: `scripts/staging_verification.py` +
+  `STAGING_VERIFICATION_REPORT.md`. Structure: 20-minute load run,
+  SIGTERM drain test, memory delta sanity check, restart-alerter
+  kill-test. Wall-clock 30–60 minutes.
+- Long-horizon stability verification (5% RSS drift over 24h,
+  spectral centroid drift, GPU accumulation across an overnight
+  run) deferred to v1.1+ operations work. Production monitoring
+  carries the continuous-verification load for the shippable
+  period.
+
+§5.1's exit-criteria row for "24h soak passes" is marked **DESCOPED**
+in `M8_COMPLETION_REPORT.md § 1`, with a pointer to this amendment.
