@@ -8,15 +8,15 @@ something we want to hear about.*
 
 ## What we're testing this cycle
 
-Three feature tabs are live: **TTS**, **Clone**, **Library**. Plus the
-existing **Fine-tune** wizard. Three tabs — **Design**, **Transcribe**,
-**Conversation** — are intentionally "Coming soon" placeholders
-in this build. Ignore them. If you click one, you'll see a card
-explaining what it will do; that's the whole interaction. We know.
+All seven tabs are live: **TTS**, **Clone**, **Design**, **Library**,
+**Conversation**, **Transcribe**, **Fine-tune**. Every backend feature
+the gateway exposes is now reachable from the browser; there are no
+"Coming soon" placeholders in this build.
 
-Our goal is to hear about the **core voice-cloning loop**: authenticate,
-see what voices exist, clone a new one, synthesize speech with it,
-delete it when you're done.
+Our goal is to hear about the **full platform loop**: authenticate,
+browse the library, clone a voice, synthesize with it, design a voice
+from a prompt, transcribe an audio clip, fine-tune a LoRA, then try
+a live conversation. Sign out when you're done.
 
 ---
 
@@ -175,7 +175,90 @@ Total count at the top decrements.
 - Did the "Cancel" button behave? It should close the modal without
   doing anything.
 
-### F. Sign out
+### F. Design a voice from a prompt
+
+1. Click **"Design"** (tab 03).
+2. In the **Describe the voice you want** box, type a short natural-
+   language prompt. Example prompts sit underneath as chips — click
+   one to seed the textarea, or write your own: *"A warm British
+   narrator, unhurried, mid-range male."*
+3. Optional: fill **Sample text** with what the preview should say.
+   Default is `Hello. This is a preview of the designed voice.`
+4. Hit **Generate preview**. Button flips to "Designing voice…" while
+   the gateway renders the preview clip.
+5. A card appears with an `<audio>` element — play the preview.
+6. If it sounds right, type a **Voice name** and hit **Save to
+   library**. On success a celebration panel with **Test in TTS →**
+   + **Go to library** handoffs appears.
+
+**What should happen:**
+- Editing the prompt or sample text after generating hides the save
+  form — you can't accidentally commit a stale preview.
+- The saved voice has `source: designed` in the library.
+
+**What to flag:**
+- Preview audio doesn't play / sounds wrong for the prompt.
+- Save flow errors with a confusing message on name clash
+  (we override 409 → "A voice with that name already exists").
+
+### G. Transcribe an audio clip
+
+1. Click **"Transcribe"** (tab 06).
+2. Two modes at the top: **Upload audio** (drag/drop a file) and
+   **Record** (mic capture in-browser).
+3. For upload: drop `scripts/m0/smoke_tts.wav` or any fixture clip.
+   For record: click the big circular mic button (grant permission
+   if the browser prompts), say a few sentences, click it again to
+   stop. A playback `<audio>` appears on both paths.
+4. Pick a **Language** if you know it — leaving it on "Auto-detect
+   (Nano)" works for English/Chinese/Japanese. Other languages route
+   through Fun-ASR MLT.
+5. Optional: enter **Hotwords** (comma-separated) to bias Fun-ASR
+   toward proper nouns or jargon.
+6. Hit **Transcribe**. Small files go through instantly; large files
+   show an upload-percentage indicator before Fun-ASR runs.
+7. Transcript panel below shows the text, language detected, model
+   used (nano vs mlt), word count, audio duration, and RTF. **Copy**
+   and **Download .txt** actions.
+
+**What to flag:**
+- Did a recording in-browser produce garbage transcripts? The
+  `audio/webm;codecs=opus` container is what we send by default;
+  some browsers may pick a different container.
+- Was the language mis-detected on "Auto"? Try picking the code
+  manually and note whether quality improves.
+- Did RTF stay under 1.0 on real hardware? (Above 1.0 means Fun-ASR
+  is processing slower than realtime — flag it if persistent.)
+
+### H. Have a conversation
+
+1. Click **"Conversation"** (tab 05).
+2. Pick a **Voice** for the AI's responses (leave on default for the
+   gateway's built-in voice).
+3. Hit **Start conversation**. Grant mic permission.
+4. Top-right pill shows **Listening**. Say something: *"Hello,
+   what's your name?"* Stop talking; the pill flips to **Thinking**
+   for a moment, then **Speaking** as the AI plays back its reply.
+5. Your partial transcript appears in the rail in real time; the
+   AI's reply streams in as `response.text_delta` tokens.
+6. While the AI is speaking, try **barge-in**: start speaking over
+   it. Playback fades out within a few hundred milliseconds, the
+   previous assistant turn is marked `interrupted`, and the state
+   pill flips back to **Listening · you**.
+7. Alternatively, click **Stop AI** while it's speaking — this mutes
+   local playback (note: the server keeps generating unless you
+   also start speaking).
+8. Hit **End conversation** to tear down the session.
+
+**What to flag:**
+- Did barge-in actually cut off the audio promptly? We target <200 ms
+  end-to-end (server `interrupt` event → local fade complete).
+- Did the transcript rail lose a turn or double-post one?
+- Did a reconnect banner appear on a flaky network? It should
+  auto-reconnect up to 5 times; failure after that should leave a
+  clear error.
+
+### I. Sign out
 
 1. Top-right of the nav, click **Sign out**.
 2. A modal asks "Clear token?" with Cancel / Sign out.
@@ -217,9 +300,7 @@ We're especially curious about:
 
 Symmetric flags so you don't false-positive a bug:
 
-- **Design / Transcribe / Conversation tabs don't work.** They're
-  labeled "Coming in a future update" for a reason. Not a bug.
-- **The home page footer says "M6 · playground".** Not a bug — the
+- **The home page kicker says "M6 · playground".** Not a bug — the
   root README will be corrected once two parallel streams (this
   and M8) both land.
 - **The `NEXT_PUBLIC_GATEWAY_URL` env var is how the UI points at
