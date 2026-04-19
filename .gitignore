@@ -37,8 +37,11 @@ uv.lock.bak
 /.claude/
 /my-clone/
 
-# Soak harness outputs — generated per run, not committed.
+# Soak / staging verification harness outputs — generated per run,
+# not committed. The rendered reports (SOAK_REPORT.md / STAGING_VERIFICATION_REPORT.md)
+# live at the repo root and are committed.
 /soak-artifacts/
+/staging-artifacts/
 
 # Editor
 .vscode/
