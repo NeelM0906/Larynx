@@ -7,7 +7,7 @@ import { ErrorPanel } from "@/components/error-panel";
 import { apiFetch } from "@/lib/api-client";
 import { humanizeApiError, type HumanizedError } from "@/lib/errors";
 import { getToken, invalidateToken } from "@/lib/token";
-import { startCapture, type AudioCaptureHandle } from "@/lib/conversation/audio-capture";
+import { startCapture, type AudioCaptureHandle } from "@/lib/audio-capture";
 import { AudioPlayback } from "@/lib/conversation/audio-playback";
 
 const INPUT_RATE = 16000;
@@ -272,11 +272,24 @@ export default function ConversationPage() {
       playbackRef.current = new AudioPlayback(OUTPUT_RATE);
       await playbackRef.current.init();
 
-      const ws = new WebSocket(url);
+      let opened = false;
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(url);
+      } catch (e) {
+        setConnState("error");
+        setError({
+          headline: "Couldn't construct the conversation WebSocket",
+          detail: (e as Error).message,
+          raw: `URL: ${url}\n${String(e)}`,
+        });
+        return;
+      }
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
 
       ws.onopen = () => {
+        opened = true;
         setConnState("open");
         reconnectAttemptsRef.current = 0;
         const cfg = {
@@ -304,8 +317,14 @@ export default function ConversationPage() {
         }
       };
 
-      ws.onerror = () => {
+      ws.onerror = (ev) => {
         setConnState("error");
+        // Native `error` events on WebSocket carry no useful detail; the
+        // immediately-following `close` is what exposes `code` + `reason`.
+        // We leave the humanised surface for onclose to build.
+        if (typeof console !== "undefined") {
+          console.error("[conversation] WebSocket error", { url, event: ev });
+        }
       };
 
       ws.onclose = (ev) => {
@@ -313,6 +332,7 @@ export default function ConversationPage() {
           return; // superseded — ignore
         }
         wsRef.current = null;
+        const neverOpened = !opened;
         // Clean close initiated by us (session.end) — no reconnect.
         if (ev.code === 1000 || ev.code === 1001) {
           setConnState("disconnected");
@@ -324,6 +344,23 @@ export default function ConversationPage() {
         if (ev.code === 1008) {
           invalidateToken("ws-rejected");
           setConnState("disconnected");
+          reconnectAttemptsRef.current = RECONNECT_MAX;
+          const cap = captureRef.current;
+          captureRef.current = null;
+          if (cap) void cap.stop();
+          setMicOn(false);
+          return;
+        }
+        // If the socket never reached OPEN, the handshake itself failed —
+        // surface a visible error with the URL + close code so testers
+        // can tell why instead of seeing a mute "Connection error" pill.
+        if (neverOpened) {
+          setConnState("error");
+          setError({
+            headline: "Couldn't open the conversation WebSocket.",
+            detail: `Closed before handshake — code=${ev.code}${ev.reason ? ` · ${ev.reason}` : ""}.`,
+            raw: `URL: ${url}\ncode: ${ev.code}\nreason: ${ev.reason || "(none)"}\nwasClean: ${ev.wasClean}`,
+          });
           reconnectAttemptsRef.current = RECONNECT_MAX;
           const cap = captureRef.current;
           captureRef.current = null;
