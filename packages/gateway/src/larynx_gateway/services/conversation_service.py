@@ -227,6 +227,12 @@ class ConversationConfig:
     lora_name: str | None = None
     llm_model: str = "anthropic/claude-haiku-4.5"
     system_prompt: str = ""
+    # ISO-639 language code forwarded to Fun-ASR. ``None`` means let
+    # Fun-ASR-Nano auto-detect (zh/en/ja), but that auto-detect frequently
+    # misclassifies short English utterances and filler noise as Chinese
+    # tokens ("对", "嗯"). Default to "en" so the conversation sticks to
+    # English unless a caller explicitly overrides.
+    stt_language: str | None = "en"
     # User-side PCM is 16kHz mono int16 — FunASR requirement.
     input_sample_rate: int = 16000
     # TTS-side PCM rate sent back to the client.
@@ -324,6 +330,7 @@ class ConversationSession:
         self._pcm_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         stt_cfg = STTStreamConfig(
             sample_rate=self._cfg.input_sample_rate,
+            language=self._cfg.stt_language,
             chunk_interval_ms=self._cfg.partial_interval_ms,
             speech_end_silence_ms=self._cfg.speech_end_silence_ms,
         )

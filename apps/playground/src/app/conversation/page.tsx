@@ -295,6 +295,9 @@ export default function ConversationPage() {
         const cfg = {
           type: "config",
           voice_id: voiceId || undefined,
+          // Force English — Fun-ASR-Nano's auto-detect misclassifies short
+          // English utterances and filler noise as Chinese tokens.
+          language: "en",
           input_sample_rate: INPUT_RATE,
           output_sample_rate: OUTPUT_RATE,
           speech_end_silence_ms: 300,
