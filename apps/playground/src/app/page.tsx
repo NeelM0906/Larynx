@@ -16,9 +16,9 @@ const STATUS: Record<TabLabel, string> = {
   Clone: "Ready",
   Library: "Ready",
   "Fine-tune": "Ready",
-  Design: "Coming soon",
-  Transcribe: "Coming soon",
-  Conversation: "Coming soon",
+  Design: "Ready",
+  Transcribe: "Ready",
+  Conversation: "Ready",
 };
 
 export default function Home() {
@@ -34,9 +34,10 @@ export default function Home() {
         <span className="italic">transcripts</span> — without opening curl.
       </h1>
       <p className="mt-8 max-w-2xl text-muted-foreground text-lg leading-relaxed">
-        Seven tabs, one token. Every page talks to the same gateway you&apos;d
-        hit from your own code. Nothing here is for customers; everything here
-        is for us.
+        Seven tabs, one token, every backend feature reachable from the
+        browser. Every page talks to the same gateway you&apos;d hit from
+        your own code. Nothing here is for customers; everything here is
+        for us.
       </p>
       <div className="rule-hairline mt-16" />
       <div className="mt-16 grid grid-cols-1 md:grid-cols-2 gap-px bg-border/60 border border-border/60">
