@@ -13,6 +13,11 @@ import { getToken } from "@/lib/token";
 const MAX_CHARS = 1000;
 const BASE_URL = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "";
 
+const SAMPLE_RATES = [16000, 24000, 48000] as const;
+const DEFAULT_SAMPLE_RATE = 24000;
+const DEFAULT_CFG = 2.0;
+const DEFAULT_TEMPERATURE = 1.0;
+
 type VoiceSource = "uploaded" | "designed" | "seed" | "lora";
 
 interface Voice {
@@ -46,6 +51,10 @@ export default function TtsPage() {
   const [voices, setVoices] = useState<Voice[] | null>(null);
   const [voiceId, setVoiceId] = useState<string>("");
   const [voicesError, setVoicesError] = useState<HumanizedError | null>(null);
+
+  const [sampleRate, setSampleRate] = useState<number>(DEFAULT_SAMPLE_RATE);
+  const [cfgValue, setCfgValue] = useState<number>(DEFAULT_CFG);
+  const [temperature, setTemperature] = useState<number>(DEFAULT_TEMPERATURE);
 
   const [synthesizing, setSynthesizing] = useState(false);
   const [synthError, setSynthError] = useState<HumanizedError | null>(null);
@@ -97,7 +106,12 @@ export default function TtsPage() {
     setSynthError(null);
     try {
       const token = getToken();
-      const body: Record<string, unknown> = { text: trimmedText };
+      const body: Record<string, unknown> = {
+        text: trimmedText,
+        sample_rate: sampleRate,
+        cfg_value: cfgValue,
+        temperature,
+      };
       if (voiceId) body.voice_id = voiceId;
       const res = await fetch(`${BASE_URL}/v1/tts`, {
         method: "POST",
@@ -138,7 +152,12 @@ export default function TtsPage() {
     } finally {
       setSynthesizing(false);
     }
-  }, [canSynth, trimmedText, voiceId]);
+  }, [canSynth, trimmedText, voiceId, sampleRate, cfgValue, temperature]);
+
+  const paramsChanged =
+    sampleRate !== DEFAULT_SAMPLE_RATE ||
+    cfgValue !== DEFAULT_CFG ||
+    temperature !== DEFAULT_TEMPERATURE;
 
   return (
     <PageShell
@@ -179,6 +198,21 @@ export default function TtsPage() {
           voiceId={voiceId}
           onChange={setVoiceId}
           error={voicesError}
+        />
+
+        <AdvancedParams
+          sampleRate={sampleRate}
+          setSampleRate={setSampleRate}
+          cfgValue={cfgValue}
+          setCfgValue={setCfgValue}
+          temperature={temperature}
+          setTemperature={setTemperature}
+          changed={paramsChanged}
+          onReset={() => {
+            setSampleRate(DEFAULT_SAMPLE_RATE);
+            setCfgValue(DEFAULT_CFG);
+            setTemperature(DEFAULT_TEMPERATURE);
+          }}
         />
 
         <ErrorPanel error={synthError} />
@@ -312,6 +346,134 @@ function ResultPanel({ result, text }: { result: SynthResult; text: string }) {
           Download .wav
         </a>
       </div>
+    </div>
+  );
+}
+
+function AdvancedParams(props: {
+  sampleRate: number;
+  setSampleRate: (n: number) => void;
+  cfgValue: number;
+  setCfgValue: (n: number) => void;
+  temperature: number;
+  setTemperature: (n: number) => void;
+  changed: boolean;
+  onReset: () => void;
+}) {
+  const {
+    sampleRate,
+    setSampleRate,
+    cfgValue,
+    setCfgValue,
+    temperature,
+    setTemperature,
+    changed,
+    onReset,
+  } = props;
+  return (
+    <details className="group rounded-md border border-border bg-card/40 [&[open]]:bg-card">
+      <summary className="flex cursor-pointer items-center justify-between px-4 py-3 text-sm select-none">
+        <span className="flex items-baseline gap-3">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+            Advanced
+          </span>
+          {changed && (
+            <span className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-widest text-primary">
+              ● modified
+            </span>
+          )}
+        </span>
+        <span className="text-muted-foreground transition-transform group-open:rotate-90">
+          ›
+        </span>
+      </summary>
+      <div className="grid grid-cols-1 gap-5 border-t border-border/60 p-5 md:grid-cols-3">
+        <div className="flex flex-col gap-2">
+          <label
+            htmlFor="tts-sr"
+            className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground"
+          >
+            Sample rate
+          </label>
+          <select
+            id="tts-sr"
+            value={sampleRate}
+            onChange={(e) => setSampleRate(Number(e.target.value))}
+            className="h-9 rounded-md border border-border bg-background px-3 text-sm"
+          >
+            {SAMPLE_RATES.map((sr) => (
+              <option key={sr} value={sr}>
+                {sr / 1000} kHz
+              </option>
+            ))}
+          </select>
+          <span className="text-[11px] text-muted-foreground">
+            Output WAV sample rate. 24 kHz is the model-native default.
+          </span>
+        </div>
+        <NumSlider
+          label="CFG value"
+          value={cfgValue}
+          min={1}
+          max={3}
+          step={0.1}
+          format={(n) => n.toFixed(1)}
+          onChange={setCfgValue}
+          hint="Prompt adherence. Higher = more on-prompt but less natural."
+        />
+        <NumSlider
+          label="Temperature"
+          value={temperature}
+          min={0}
+          max={2}
+          step={0.1}
+          format={(n) => n.toFixed(1)}
+          onChange={setTemperature}
+          hint="Sampling variance. 0 is greedy; defaults to 1.0."
+        />
+        {changed && (
+          <button
+            type="button"
+            onClick={onReset}
+            className="self-start rounded-md border border-border px-3 py-1 text-xs text-muted-foreground hover:bg-muted md:col-span-3"
+          >
+            Reset to defaults
+          </button>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function NumSlider(props: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  format: (n: number) => string;
+  onChange: (n: number) => void;
+  hint?: string;
+}) {
+  const { label, value, min, max, step, format, onChange, hint } = props;
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between">
+        <label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+          {label}
+        </label>
+        <span className="font-mono text-sm text-foreground">{format(value)}</span>
+      </div>
+      <input
+        type="range"
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full"
+      />
+      {hint && <span className="text-[11px] text-muted-foreground">{hint}</span>}
     </div>
   );
 }
