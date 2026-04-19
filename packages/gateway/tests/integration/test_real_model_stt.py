@@ -14,6 +14,26 @@ Audio fixtures live under ``packages/gateway/tests/fixtures/audio/``; the
 test skips with a clear message if any file is missing so the suite can
 still advance on a box where fixtures haven't been seeded yet.
 
+Fixture provenance
+------------------
+
+* ``english_reference.wav`` and ``hotword_reference.wav`` are VoxCPM2
+  synthesis (16 kHz mono PCM_16). Ground-truth texts live in
+  ``english_reference.txt`` and ``transcripts.json``.
+* ``chinese_reference.wav`` is a copy of ``zh.wav`` bundled with the
+  Fun-ASR-vllm checkpoint at
+  ``scripts/m0/Fun-ASR-vllm/triton_server/assets/zh.wav`` — real human
+  Chinese speech.
+* ``portuguese_reference.wav`` and ``cantonese_reference.wav`` are
+  also copies of that ``zh.wav``. The pt / yue tests assert the
+  *language router* sends those tags to Fun-ASR-MLT-Nano
+  (``model_used == "mlt"``) and that the transcript is non-empty;
+  neither asserts transcript accuracy or language detection, so
+  routing-only validation works with any speech-bearing audio.
+
+Regenerate via ``uv run python scripts/seed_stt_fixtures.py`` (or
+``uv run --extra gpu ...`` if the VoxCPM2 fallback path needs to fire).
+
 Per CLAUDE memory ``feedback_no_fakes_in_tests.md`` — no mocks in this
 file. Real model, real Postgres, real Redis.
 """
@@ -23,11 +43,76 @@ from __future__ import annotations
 import os
 import pathlib
 import re
+from collections.abc import Iterator
 
 import pytest
 from httpx import AsyncClient
 
 FIXTURE_DIR = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "audio"
+
+
+@pytest.fixture(autouse=True)
+def _real_stt_env() -> Iterator[None]:
+    """Override the session conftest's `mock` defaults.
+
+    The session-scoped ``_session_env`` autouse fixture in
+    ``packages/gateway/tests/conftest.py`` forces ``LARYNX_STT_MODE=mock``
+    and ``LARYNX_VAD_PUNC_MODE=mock`` so the fast mock suite stays fast.
+    The real-model STT tests in this file need the actual Fun-ASR-Nano
+    + Fun-ASR-MLT-Nano + ct-punc stack, matching what
+    ``test_real_model_stream.py::live_server`` does for itself. This
+    per-test fixture overrides the env vars just long enough for the
+    ``client`` fixture in conftest.py to read the real-mode values when
+    it re-creates the app, then restores the originals on teardown so
+    later modules (run in the same pytest invocation) see the session
+    defaults.
+
+    Also mirrors ``test_real_model_stream.py`` / ``..._conversation.py``
+    in putting the Fun-ASR-vllm checkout on ``sys.path`` so
+    ``from model import FunASRNano`` resolves inside the real backend's
+    ``_load_sync``.
+    """
+    if os.environ.get("RUN_REAL_MODEL") != "1":
+        # Respect the real_model opt-in: if it's off, skip the swap so
+        # the test's own ``_needs_real_model()`` check fires with the
+        # standard skip message.
+        yield
+        return
+
+    funasr_vllm_dir = os.environ.get(
+        "LARYNX_FUNASR_VLLM_DIR", "/home/ripper/larynx-smoke/Fun-ASR-vllm"
+    )
+    if not pathlib.Path(funasr_vllm_dir).exists():
+        pytest.skip(f"Fun-ASR-vllm repo not found at {funasr_vllm_dir}")
+    import sys
+
+    if funasr_vllm_dir not in sys.path:
+        sys.path.insert(0, funasr_vllm_dir)
+
+    saved = {
+        k: os.environ.get(k)
+        for k in (
+            "LARYNX_STT_MODE",
+            "LARYNX_VAD_PUNC_MODE",
+            "LARYNX_FUNASR_GPU",
+            "LARYNX_FUNASR_VLLM_DIR",
+        )
+    }
+    os.environ["LARYNX_STT_MODE"] = "funasr"
+    os.environ["LARYNX_VAD_PUNC_MODE"] = "real"
+    # Pin Fun-ASR to GPU 1 to match production allocation (README hardware
+    # table). GPU 0 is reserved for VoxCPM2; this module doesn't use TTS
+    # but the setting keeps the backend's GPU selection deterministic.
+    os.environ["LARYNX_FUNASR_GPU"] = os.environ.get("LARYNX_FUNASR_GPU", "1")
+    os.environ["LARYNX_FUNASR_VLLM_DIR"] = funasr_vllm_dir
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 def _needs_real_model() -> None:

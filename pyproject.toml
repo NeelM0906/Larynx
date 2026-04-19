@@ -95,6 +95,11 @@ flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/down
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    # Loads `.env` at pytest session start so tests pick up secrets
+    # (e.g. OPENROUTER_API_KEY for real-model conversation tests) from
+    # the same file production reads via pydantic-settings. Existing
+    # shell env vars take precedence; .env is a fallback.
+    "pytest-dotenv>=0.5",
     "httpx>=0.27",
     "ruff>=0.6",
     "anyio>=4.4",
@@ -105,6 +110,11 @@ dev = [
     # (test_openai_sdk_speech*.py). Keeps the SDK out of runtime deps; only
     # tests marked ``@pytest.mark.openai_sdk`` reach for it.
     "openai>=1.40",
+    # WER computation for the M0 smoke roundtrip regression test
+    # (test_m0_smoke_roundtrip.py → bugs/003 post-fix gate). Small,
+    # pure-Python; keeps the test self-contained without a hand-rolled
+    # Levenshtein.
+    "jiwer>=4.0",
 ]
 
 [tool.ruff]
@@ -143,3 +153,8 @@ markers = [
     "openai_sdk: exercises the upstream OpenAI Python SDK against a live gateway (opt-in)",
 ]
 addopts = "-m 'not real_model and not real_train and not openai_sdk'"
+# pytest-dotenv: load `.env` from the repo root at session start. Existing
+# environment variables take precedence over file entries (override=false
+# is the pytest-dotenv default), so explicit `OPENROUTER_API_KEY=xxx
+# pytest ...` still wins. File is optional; missing .env is not an error.
+env_files = [".env"]

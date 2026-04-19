@@ -1,0 +1,31 @@
+{
+  "english_reference.wav": {
+    "ground_truth": "Hello from the voice platform smoke test.",
+    "source": "VoxCPM2 synthesis (or scripts/m0/smoke_tts.wav fallback)",
+    "language": "en"
+  },
+  "hotword_reference.wav": {
+    "ground_truth": "Please contact Larynx for help.",
+    "source": "VoxCPM2 synthesis",
+    "language": "en",
+    "notes": "hotword assertion in test: must transcribe 'Larynx' when that term is passed as a hotword"
+  },
+  "chinese_reference.wav": {
+    "ground_truth": null,
+    "source": "scripts/m0/Fun-ASR-vllm/triton_server/assets/zh.wav (real human speech shipped with the Fun-ASR-vllm checkpoint)",
+    "language": "zh",
+    "notes": "populate chinese_anchor.txt with an observed substring if you want the anchor assertion active"
+  },
+  "portuguese_reference.wav": {
+    "ground_truth": null,
+    "source": "copy of chinese_reference.wav",
+    "language": "pt",
+    "notes": "test asserts language-router sends pt → Fun-ASR-MLT-Nano (model_used == 'mlt') and the transcript is non-empty; audio content is irrelevant to the assertions."
+  },
+  "cantonese_reference.wav": {
+    "ground_truth": null,
+    "source": "copy of chinese_reference.wav",
+    "language": "yue",
+    "notes": "test asserts language-router sends yue → Fun-ASR-MLT-Nano; audio content is irrelevant to the assertions."
+  }
+}

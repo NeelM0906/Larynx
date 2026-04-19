@@ -43,6 +43,21 @@ test:
 test-real:
 	RUN_REAL_MODEL=1 uv run pytest -m real_model -q -s
 
+# Workaround for bugs/002 (real_model GPU accumulation across modules):
+# run each real-model file in its own pytest process so vLLM subprocess
+# handles are reaped on interpreter exit. Use this instead of `test-real`
+# until bugs/002 is closed.
+test-real-per-file:
+	@set -e; for f in \
+	  packages/gateway/tests/integration/test_real_model.py \
+	  packages/gateway/tests/integration/test_real_model_stream.py \
+	  packages/gateway/tests/integration/test_real_model_conversation.py \
+	  packages/gateway/tests/integration/test_real_model_stt.py \
+	  packages/gateway/tests/integration/test_m0_smoke_roundtrip.py; do \
+	    echo "=== $$f ==="; \
+	    RUN_REAL_MODEL=1 uv run pytest "$$f" -m real_model -v; \
+	  done
+
 seed:
 	uv run python scripts/load_demo_voices.py
 
