@@ -101,4 +101,4 @@ async def root() -> dict[str, str]:
     }
 
 
-__all__ = ["router", "status"]
+__all__ = ["router"]
