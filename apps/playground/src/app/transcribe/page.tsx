@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { ErrorPanel } from "@/components/error-panel";
-import { apiFetch, ApiError } from "@/lib/api-client";
+import { apiFetch, apiErrorFrom } from "@/lib/api-client";
 import { humanizeApiError, type HumanizedError } from "@/lib/errors";
 import { getToken } from "@/lib/token";
 
@@ -667,7 +667,7 @@ function xhrUpload<T>(
       if (ok) {
         resolve(body as T);
       } else {
-        reject(new ApiError(`${xhr.status} ${xhr.statusText}`, xhr.status, body));
+        reject(apiErrorFrom(xhr.status, xhr.statusText, body));
       }
     };
     xhr.onerror = () => reject(new Error("Network error during upload."));

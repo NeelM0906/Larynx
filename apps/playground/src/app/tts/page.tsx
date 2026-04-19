@@ -6,7 +6,7 @@ import Link from "next/link";
 import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { ErrorPanel } from "@/components/error-panel";
-import { apiFetch, ApiError } from "@/lib/api-client";
+import { apiFetch, buildApiError } from "@/lib/api-client";
 import { humanizeApiError, type HumanizedError } from "@/lib/errors";
 import { getToken } from "@/lib/token";
 
@@ -121,15 +121,7 @@ export default function TtsPage() {
         },
         body: JSON.stringify(body),
       });
-      if (!res.ok) {
-        let errBody: unknown;
-        try {
-          errBody = await res.json();
-        } catch {
-          errBody = await res.text();
-        }
-        throw new ApiError(`${res.status} ${res.statusText}`, res.status, errBody);
-      }
+      if (!res.ok) throw await buildApiError(res);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);

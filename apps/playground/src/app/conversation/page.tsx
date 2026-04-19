@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorPanel } from "@/components/error-panel";
 import { apiFetch } from "@/lib/api-client";
 import { humanizeApiError, type HumanizedError } from "@/lib/errors";
-import { getToken } from "@/lib/token";
+import { getToken, invalidateToken } from "@/lib/token";
 import { startCapture, type AudioCaptureHandle } from "@/lib/conversation/audio-capture";
 import { AudioPlayback } from "@/lib/conversation/audio-playback";
 
@@ -316,6 +316,19 @@ export default function ConversationPage() {
         // Clean close initiated by us (session.end) — no reconnect.
         if (ev.code === 1000 || ev.code === 1001) {
           setConnState("disconnected");
+          return;
+        }
+        // Policy-violation close = gateway rejected the bearer token.
+        // Clear stored token so AuthGate reopens rather than spinning on
+        // reconnects that will all fail.
+        if (ev.code === 1008) {
+          invalidateToken("ws-rejected");
+          setConnState("disconnected");
+          reconnectAttemptsRef.current = RECONNECT_MAX;
+          const cap = captureRef.current;
+          captureRef.current = null;
+          if (cap) void cap.stop();
+          setMicOn(false);
           return;
         }
         // Auto-reconnect with backoff while we still want to be talking.

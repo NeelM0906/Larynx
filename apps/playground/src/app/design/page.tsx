@@ -6,7 +6,7 @@ import Link from "next/link";
 import { PageShell } from "@/components/page-shell";
 import { Button } from "@/components/ui/button";
 import { ErrorPanel } from "@/components/error-panel";
-import { apiFetch, ApiError } from "@/lib/api-client";
+import { apiFetch, ApiError, buildApiError } from "@/lib/api-client";
 import { humanizeApiError, type HumanizedError } from "@/lib/errors";
 import { getToken } from "@/lib/token";
 
@@ -108,15 +108,7 @@ export default function DesignPage() {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         },
       );
-      if (!audioRes.ok) {
-        let errBody: unknown;
-        try {
-          errBody = await audioRes.json();
-        } catch {
-          errBody = await audioRes.text();
-        }
-        throw new ApiError(`${audioRes.status} ${audioRes.statusText}`, audioRes.status, errBody);
-      }
+      if (!audioRes.ok) throw await buildApiError(audioRes);
       const blob = await audioRes.blob();
       const url = URL.createObjectURL(blob);
       if (prevAudioUrlRef.current) URL.revokeObjectURL(prevAudioUrlRef.current);
