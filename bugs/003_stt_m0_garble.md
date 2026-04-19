@@ -617,7 +617,125 @@ sequence below):
 
 ---
 
-## § 8. (post-fix verification — written after the FIX-PIPE commits land)
+## § 8. Post-fix verification
 
-(pending)
+Three-commit FIX-PIPE sequence (on `feat/m7-finetune`):
+
+```
+b65c06e  test(m0): bugs/003 xfail regression — M0 smoke roundtrip garbles
+3fff6e0  fix(m0): write smoke_tts.wav at 16 kHz via server.get_model_info()
+8cf7c74  test(m0): bugs/003 remove xfail — M0 roundtrip now PASSes
+```
+
+(`3fff6e0` was amended once during the sequence to swap librosa's
+`res_type="kaiser_best"` for `"soxr_hq"` — the former pulls in
+`resampy`, which isn't in the main uv workspace venv. `soxr_hq` is
+librosa's bundled high-quality polyphase resampler and needs no extra
+dep. Not pushed between amend and the current state.)
+
+### § 8.1 M0 smoke pipeline — pre vs. post
+
+Logs captured at `scripts/m0/logs/smoke_tts_20260418.log` and
+`scripts/m0/logs/smoke_stt_20260418.log` (the April-16 originals in the
+same directory are preserved unchanged for comparison).
+
+**WAV metadata:**
+
+| Field | Pre-fix | Post-fix |
+|-------|---------|----------|
+| samplerate | 16 000 (mis-labelled) | 16 000 (correct — resampled from 48 k native) |
+| channels | 1 | 1 |
+| subtype | PCM_16 | PCM_16 |
+| frames | 161 280 | 66 560 |
+| duration_s | 10.08 | 4.16 (natural speech pace) |
+| native_sr reported by server | (never queried) | 48 000 (via `server.get_model_info()`) |
+
+The post-fix pipeline logs explicitly:
+
+```
+[tts] VoxCPM2 native output rate: 48000 Hz
+[tts] generated 199680 samples @ 48000 Hz → 66560 samples @ 16000 Hz (4.16s audio)
+```
+
+— so future readers can see the conversion happened, not guess at it.
+
+**Transcript:**
+
+| Run | Transcript | WER | CER |
+|-----|-----------|-----|-----|
+| Pre-fix (bugs/003 § 1 Run C; today's reproduction) | "Oh yes, yes, it can." / "Honor, honor, yes, but don't share twice." / "Honor, honor, yes, but you are so close." | 1.000 – 1.143 | 0.725 – 0.850 |
+| Post-fix (regression test invocation) | "Hello from the voice platform smoke test." | **0.000** | **0.000** |
+| Post-fix (fresh scripts/m0 run captured to logs/) | "Hello from the voice platform smoke test. Hello." | 0.143 | 0.150 |
+
+The regression test transcribes the reference phrase exactly. The second
+run (fresh smoke_tts.py invocation) synthesised a slightly longer
+utterance (4.16 s vs. 3.04 s in the regression-test invocation), and
+Fun-ASR picked up a trailing "Hello." — both well under the
+`PASS_WER ≤ 0.2` threshold (1 ins / 7 ref words = 0.143) and nothing
+like the pre-fix garble. The variance run-to-run reflects VoxCPM2's
+non-determinism, not pipeline instability.
+
+### § 8.2 Regression test — green
+
+```
+RUN_REAL_MODEL=1 uv run pytest \
+  packages/gateway/tests/integration/test_m0_smoke_roundtrip.py \
+  -m real_model -v -s
+
+[roundtrip] ref='Hello from the voice platform smoke test.'
+            hyp='Hello from the voice platform smoke test.'
+            WER=0.000 CER=0.000
+PASSED
+```
+
+### § 8.3 Full `real_model` suite — no regressions vs. bugs/002 baseline
+
+Full run of `RUN_REAL_MODEL=1 uv run pytest -m real_model -v`:
+
+```
+= 6 passed, 11 skipped, 299 deselected, 5 warnings, 6 errors in 227.30s =
+```
+
+Comparison against bugs/002 § 1's baseline:
+
+| Count | bugs/002 baseline | bugs/003 post-fix | Delta |
+|-------|-------------------|-------------------|-------|
+| passed | 5 | 6 | +1 (new `test_m0_smoke_roundtrip`) |
+| skipped | 11 | 11 | 0 |
+| errors | 6 | 6 | 0 |
+
+- **The +1 pass is the new bugs/003 regression test.**
+- The 11 skipped + 6 errored are **unchanged from bugs/002**. Those are
+  the pre-existing GPU-accumulation-across-test-modules issue that
+  bugs/002 already documents; nothing in this branch touches that
+  failure mode.
+- The `test_real_model_stream.py` suite (bugs/001's) shows SKIPPED in
+  the full run, also a bugs/002 artifact. Running that file in isolation
+  passes all 5 tests cleanly:
+
+  ```
+  RUN_REAL_MODEL=1 uv run pytest \
+    packages/gateway/tests/integration/test_real_model_stream.py -m real_model -v
+  ================== 5 passed, 15 warnings in 135.92s (0:02:15) ==================
+  ```
+
+  So bugs/001's concurrent-STT fix is still healthy and bugs/003 has not
+  regressed it.
+
+No previously-passing test has moved to failing. Work is mergeable on
+top of `main` without regressing any existing green path.
+
+### § 8.4 Post-mortem — one thing to change with hindsight
+
+My § 1 stretch-ratio heuristic ("9.12 s / 3 s natural ≈ 3.04×") was a
+useful first signpost but a shaky analytical crutch. The 3× argument
+depended on an assumed natural speech pace that's hard to
+defend rigorously, and in § 5.2 my updated P2 heuristic even returned
+"≈ 4.34× → candidate rate ≈ 69 485 Hz" which nobody should believe.
+What actually nailed H2 was **reading the nanovllm_voxcpm source** and
+seeing `out_sample_rate: int = 48000` defined on the VAE v2 decoder.
+That single grep was the load-bearing evidence; the speech-rate
+heuristic was decoration. Next time: lead with the source check,
+treat duration ratios as corroborating-only.
+
 
