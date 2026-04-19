@@ -143,10 +143,15 @@ Per-file results (2026-04-18, feat/m7-finetune HEAD):
 | `test_m0_smoke_roundtrip.py` (bugs/003) | 1 | 0 | 0 | 58 s | post-fix regression |
 | `test_real_model_stream.py` (streaming) | 5 | 0 | 0 | 135 s | 8-way concurrency verified |
 | `test_real_model_stt.py` (language routing) | 5 | 0 | 1 | 534 s | 1 failure = [bugs/004](./bugs/004_hotword_test_case_sensitivity.md) (case-sensitive assertion; hotword stem present in transcript) |
-| `test_real_model_conversation.py` | 0 | 6 | 0 | <1 s | skipped — set `OPENROUTER_API_KEY` in `.env` (pytest-dotenv now loads it) to unskip |
+| `test_real_model_conversation.py` | 2 | 0 | 0 | 128 s | haiku-4.5 three-turn + barge-in; both green on real hardware |
 
-Totals: **16 passed, 6 skipped, 1 failed, 0 errors** across the five
+Totals: **18 passed, 0 skipped, 1 failed, 0 errors** across the five
 real-model files. Before this branch: 6 / 11 / 0 / 6.
+
+The conversation tests parametrize over `anthropic/claude-haiku-4.5`
+only — the PRD §6 fastest-first-token target. Minimax and GLM were
+tried on 2026-04-18 and both timed out on OpenRouter's side; they're
+out of the matrix and shouldn't be re-added without the user's say-so.
 
 Unit-test suites (no real model required):
 

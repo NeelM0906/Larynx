@@ -198,11 +198,13 @@ async def _send_pcm_realtime(
 
 LLM_MODELS_UNDER_TEST = [
     # (shortname for print headers, OpenRouter model id)
-    # NB: the user requested "haiku 4.6" but OpenRouter does not list 4.6 as
-    # of 2026-04-17 — substituting the closest live version (4.5).
+    # Haiku-4.5 is the only LLM target for the real-model conversation
+    # suite — project-wide preference documented in the Larynx memory
+    # note. Minimax and GLM models were tried on 2026-04-18 and both
+    # failed with OpenRouter-side timeouts on the /v1/tts synth pre-
+    # step (presumably rate limit / slow model); skip them entirely
+    # rather than maintain flaky parametrizations.
     ("haiku-4.5", "anthropic/claude-haiku-4.5"),
-    ("minimax-m2.7", "minimax/minimax-m2.7"),
-    ("glm-5.1", "z-ai/glm-5.1"),
 ]
 
 
