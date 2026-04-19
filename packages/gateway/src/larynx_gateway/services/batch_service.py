@@ -257,6 +257,9 @@ async def record_item_failed(
     await _bump_counters_and_maybe_finish(session, job_id, delta_done=0, delta_failed=1)
 
 
+_TERMINAL_STATES = ("COMPLETED", "CANCELLED", "FAILED")
+
+
 async def _bump_counters_and_maybe_finish(
     session: AsyncSession,
     job_id: str,
@@ -264,17 +267,53 @@ async def _bump_counters_and_maybe_finish(
     delta_done: int,
     delta_failed: int,
 ) -> None:
-    job = (await session.execute(select(BatchJob).where(BatchJob.id == job_id))).scalar_one()
-    job.num_completed += delta_done
-    job.num_failed += delta_failed
+    """Atomically bump num_completed / num_failed and transition terminal.
 
-    if job.num_completed + job.num_failed >= job.num_items:
+    The pre-fix shape was SELECT → mutate in-memory → COMMIT, which lost
+    increments under concurrent consumer load (bugs/005). This rewrite
+    folds the read + write into a single ``UPDATE ... RETURNING``
+    statement so Postgres' row lock serializes concurrent callers and
+    every delta lands.
+
+    The terminal-state transition is a second UPDATE, guarded by
+    ``state NOT IN TERMINAL_STATES`` so a concurrent sibling racing
+    into the same branch is a no-op (the first caller wins, later
+    callers find the row already terminal and skip). The same guard
+    keeps :func:`cancel_job` from being clobbered: if cancel flips
+    ``state=CANCELLED`` first, the finish path won't overwrite it with
+    COMPLETED.
+    """
+    result = await session.execute(
+        update(BatchJob)
+        .where(BatchJob.id == job_id)
+        .values(
+            num_completed=BatchJob.num_completed + delta_done,
+            num_failed=BatchJob.num_failed + delta_failed,
+        )
+        .returning(
+            BatchJob.num_completed,
+            BatchJob.num_failed,
+            BatchJob.num_items,
+            BatchJob.state,
+        )
+    )
+    row = result.one()
+
+    if row.state not in _TERMINAL_STATES and row.num_completed + row.num_failed >= row.num_items:
         # Terminal. FAILED only if literally every item failed;
         # partial failures are surfaced as COMPLETED with
         # num_failed > 0 so the client can retry specific indices
         # without re-submitting a whole job.
-        job.state = "FAILED" if job.num_completed == 0 else "COMPLETED"
-        job.finished_at = _now()
+        terminal = "FAILED" if row.num_completed == 0 else "COMPLETED"
+        await session.execute(
+            update(BatchJob)
+            .where(
+                BatchJob.id == job_id,
+                BatchJob.state.notin_(_TERMINAL_STATES),
+            )
+            .values(state=terminal, finished_at=_now())
+        )
+
     await session.commit()
 
 
