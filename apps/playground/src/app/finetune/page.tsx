@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PageShell } from "@/components/page-shell";
 import { apiFetch, ApiError } from "@/lib/api-client";
+import { humanizeApiError, type HumanizedError } from "@/lib/errors";
+import { ErrorPanel } from "@/components/error-panel";
 import { getToken } from "@/lib/token";
 
 const BASE_URL = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "";
@@ -44,7 +46,7 @@ export default function FinetunePage() {
   // Upload state.
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<HumanizedError | null>(null);
   const [datasetId, setDatasetId] = useState<string | null>(null);
   const [report, setReport] = useState<PhaseAReport | null>(null);
 
@@ -54,7 +56,7 @@ export default function FinetunePage() {
   const [loraAlpha, setLoraAlpha] = useState(32);
   const [numIters, setNumIters] = useState(1000);
   const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<HumanizedError | null>(null);
 
   // Watch state.
   const [jobId, setJobId] = useState<string | null>(null);
@@ -93,10 +95,8 @@ export default function FinetunePage() {
           setStep("validate");
           return;
         }
-        setUploadError(JSON.stringify(body.detail ?? body));
-      } else {
-        setUploadError(String(e));
       }
+      setUploadError(humanizeApiError(e));
     } finally {
       setUploading(false);
     }
@@ -124,7 +124,7 @@ export default function FinetunePage() {
       setJobId(resp.job_id);
       setStep("watch");
     } catch (e) {
-      setSubmitError(String(e));
+      setSubmitError(humanizeApiError(e));
     } finally {
       setSubmitting(false);
     }
@@ -348,7 +348,7 @@ function UploadStep(props: {
   files: File[];
   setFiles: (f: File[]) => void;
   uploading: boolean;
-  uploadError: string | null;
+  uploadError: HumanizedError | null;
   onUpload: () => void;
 }) {
   const { files, setFiles, uploading, uploadError, onUpload } = props;
@@ -382,11 +382,7 @@ function UploadStep(props: {
           ))}
         </ul>
       )}
-      {uploadError && (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-          {uploadError}
-        </p>
-      )}
+      <ErrorPanel error={uploadError} />
       <button
         type="button"
         disabled={files.length === 0 || uploading}
@@ -479,7 +475,7 @@ function ConfigureStep(props: {
   numIters: number;
   setNumIters: (n: number) => void;
   submitting: boolean;
-  submitError: string | null;
+  submitError: HumanizedError | null;
   onBack: () => void;
   onSubmit: () => void;
 }) {
@@ -538,11 +534,7 @@ function ConfigureStep(props: {
         onChange={setNumIters}
         hint="Upstream default is 1000. Larger datasets want more iterations."
       />
-      {submitError && (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-          {submitError}
-        </p>
-      )}
+      <ErrorPanel error={submitError} />
       <div className="flex gap-3">
         <button
           type="button"
