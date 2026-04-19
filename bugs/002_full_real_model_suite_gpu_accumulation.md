@@ -135,3 +135,47 @@ invocation. Workaround today: run each file separately, which is what
 bugs/001 verification already does.
 
 Filing now so we don't forget it after the bugs/001 branch merges.
+
+## § 7. When to fix
+
+**Triggers for re-opening:**
+
+- **CI / soak harness needs a single-command `real_model` validation.**
+  Today's workaround (per-file loop) is fine for a developer running
+  locally, but a CI job that runs `RUN_REAL_MODEL=1 uv run pytest
+  -m real_model` in one shot will still hit the accumulation. When we
+  wire real-model validation into scheduled CI, this becomes blocking.
+- **The test count grows enough that per-file serialisation becomes
+  annoying.** Five real-model files today; if the count grows past ~10
+  or individual file runtimes stretch past 3 minutes, the per-file loop
+  starts hurting iteration speed and the fix cost amortises better.
+
+Neither applies at v1. Production is unaffected — the gateway runs
+one uvicorn process with one set of model workers, never reloads
+anything in-process, and doesn't use pytest. This is strictly a
+test-infrastructure bug.
+
+## § 8. Workaround — per-file pytest loop
+
+The canonical way to get every real-model test to run in one session
+while bugs/002 is open:
+
+```bash
+for f in \
+  packages/gateway/tests/integration/test_real_model.py \
+  packages/gateway/tests/integration/test_real_model_stream.py \
+  packages/gateway/tests/integration/test_real_model_conversation.py \
+  packages/gateway/tests/integration/test_real_model_stt.py \
+  packages/gateway/tests/integration/test_m0_smoke_roundtrip.py; do
+    RUN_REAL_MODEL=1 uv run pytest "$f" -m real_model -v
+done
+```
+
+Each file starts a fresh Python process, so vLLM subprocesses from the
+previous file's fixtures are reaped by the OS when the pytest process
+exits. Same idea as pytest's own `--forked` mode, without pulling
+`pytest-forked` into dev deps.
+
+A `make test-real-per-file` Makefile target wraps the loop above for
+ergonomics. Use it instead of `make test-real` (which runs the whole
+suite in one invocation and hits this bug) until bugs/002 is closed.
