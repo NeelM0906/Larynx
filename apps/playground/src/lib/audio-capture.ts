@@ -19,9 +19,17 @@ export interface AudioCaptureHandle {
 export type PCMCallback = (pcm16: ArrayBuffer) => void;
 
 export async function startCapture(onPCM: PCMCallback): Promise<AudioCaptureHandle> {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+    throw new Error(
+      "Microphone capture isn't available — needs a secure (HTTPS) origin and a browser with getUserMedia.",
+    );
+  }
+
+  // Permissive constraints. Safari is strict about unknown keys; keeping
+  // to the universally-supported set avoids OverconstrainedError on
+  // hardware that doesn't advertise channelCount control.
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: {
-      channelCount: 1,
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
@@ -32,7 +40,20 @@ export async function startCapture(onPCM: PCMCallback): Promise<AudioCaptureHand
   const AC: AudioContextCtor =
     window.AudioContext ??
     (window as unknown as { webkitAudioContext?: AudioContextCtor }).webkitAudioContext!;
+  if (!AC) {
+    stream.getTracks().forEach((t) => t.stop());
+    throw new Error("Web Audio API isn't available in this browser.");
+  }
   const ctx = new AC();
+  // Safari commonly starts the context in "suspended" even when created
+  // from a user gesture. Explicit resume avoids silent capture.
+  if (ctx.state === "suspended") {
+    try {
+      await ctx.resume();
+    } catch {
+      // non-fatal — if it stays suspended we just won't get audio frames
+    }
+  }
   const source = ctx.createMediaStreamSource(stream);
   const processor = ctx.createScriptProcessor(FRAME_SIZE, 1, 1);
 
