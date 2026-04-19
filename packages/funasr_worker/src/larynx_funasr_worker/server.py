@@ -27,6 +27,7 @@ from larynx_shared.ipc.messages import (
 
 from larynx_funasr_worker.audio_utils import pcm_to_float32
 from larynx_funasr_worker.language_router import UnsupportedLanguageError, resolve
+from larynx_funasr_worker.metrics import record_error, record_request, record_rtfx
 from larynx_funasr_worker.model_manager import FunASRModelManager
 
 log = structlog.get_logger(__name__)
@@ -70,7 +71,14 @@ class WorkerServer:
             task.add_done_callback(self._inflight.discard)
 
     async def _dispatch(self, msg: RequestMessage) -> None:
+        method = _method_name(msg)
+        t0 = time.perf_counter()
         response = await self._handle(msg)
+        duration_s = time.perf_counter() - t0
+        status_class = "error" if isinstance(response, ErrorMessage) else "ok"
+        record_request(method=method, duration_s=duration_s, status_class=status_class)
+        if isinstance(response, ErrorMessage):
+            record_error(method=method, error_code=response.code)
         await self._channel.responses.put(response)
 
     async def _handle(self, msg: RequestMessage) -> ResponseMessage | ErrorMessage:
@@ -98,7 +106,13 @@ class WorkerServer:
                 itn=req.itn,
                 iso_language=req.language,
             )
-            infer_ms = int((time.perf_counter() - t0) * 1000)
+            wall_clock = time.perf_counter() - t0
+            infer_ms = int(wall_clock * 1000)
+            record_rtfx(
+                model=result.model_used.value,
+                audio_seconds=len(audio) / req.sample_rate,
+                wall_clock_seconds=wall_clock,
+            )
             log.info(
                 "funasr.transcribe",
                 request_id=req.request_id,
@@ -146,7 +160,13 @@ class WorkerServer:
                 drop_tail_tokens=req.drop_tail_tokens,
                 iso_language=req.language,
             )
-            infer_ms = int((time.perf_counter() - t0) * 1000)
+            wall_clock = time.perf_counter() - t0
+            infer_ms = int(wall_clock * 1000)
+            record_rtfx(
+                model=result.model_used.value,
+                audio_seconds=len(audio) / req.sample_rate,
+                wall_clock_seconds=wall_clock,
+            )
             log.info(
                 "funasr.transcribe_rolling",
                 request_id=req.request_id,
@@ -174,6 +194,14 @@ class WorkerServer:
         except Exception as e:  # noqa: BLE001
             log.exception("funasr.transcribe_rolling_failed", request_id=req.request_id)
             return ErrorMessage(request_id=req.request_id, code="transcribe_failed", message=str(e))
+
+
+def _method_name(msg: RequestMessage) -> str:
+    if isinstance(msg, TranscribeRequest):
+        return "transcribe"
+    if isinstance(msg, TranscribeRollingRequest):
+        return "transcribe_rolling"
+    return "unknown"
 
 
 def install_signal_handlers(server: WorkerServer) -> None:

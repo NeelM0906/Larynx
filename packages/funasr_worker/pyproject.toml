@@ -12,6 +12,14 @@ dependencies = [
     # the worker self-contained for adhoc file inputs from tests/smoke).
     "librosa>=0.10",
     "soundfile>=0.12",
+    # Prometheus sidecar (ORCHESTRATION-M8 §3.1). prometheus-client owns
+    # the registry + collectors; aiohttp serves /metrics on :9101 when
+    # the worker runs as its own supervisord program. The gateway's
+    # in-process path doesn't import metrics_server, so aiohttp stays
+    # cold — but the dep has to be declared here so supervisord can
+    # import it at worker boot.
+    "prometheus-client>=0.20",
+    "aiohttp>=3.9",
 ]
 
 # The real backend pulls Fun-ASR (GitHub) + Fun-ASR-vllm (GitHub) + vllm +
