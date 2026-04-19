@@ -62,7 +62,7 @@ type Mode = "upload" | "live";
 
 export default function TranscribePage() {
   const [mode, setMode] = useState<Mode>("live");
-  const [language, setLanguage] = useState("");
+  const [language, setLanguage] = useState("en");
   const [hotwords, setHotwords] = useState("");
 
   return (
@@ -156,7 +156,7 @@ function LanguageHotwords({
           ))}
         </select>
         <span className="text-[11px] text-muted-foreground">
-          Leave on auto for English / Chinese / Japanese. Other languages route through MLT.
+          Defaults to English. Switch to auto for mixed-language audio; other languages route through MLT.
         </span>
       </div>
       <div className="flex flex-col gap-2">

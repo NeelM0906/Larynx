@@ -69,6 +69,10 @@ class _ConversationConfigFrame(BaseModel):
     voice_id: str | None = None
     llm_model: str | None = None  # default comes from app state
     system_prompt: str = ""
+    # ISO-639 code for STT. Defaults to "en" so Fun-ASR-Nano's auto-detect
+    # doesn't misclassify short English utterances as Chinese filler tokens.
+    # Pass null to opt back into auto-detect.
+    language: str | None = "en"
     input_sample_rate: int = Field(default=16000, ge=8000, le=48000)
     output_sample_rate: int = Field(default=24000, ge=8000, le=48000)
     speech_end_silence_ms: int = Field(default=300, ge=100, le=2000)
@@ -173,6 +177,7 @@ async def ws_conversation(ws: WebSocket) -> None:
         lora_name=lora_name,
         llm_model=cfg_frame.llm_model or default_model,
         system_prompt=cfg_frame.system_prompt,
+        stt_language=cfg_frame.language,
         input_sample_rate=cfg_frame.input_sample_rate,
         output_sample_rate=cfg_frame.output_sample_rate,
         speech_end_silence_ms=cfg_frame.speech_end_silence_ms,
