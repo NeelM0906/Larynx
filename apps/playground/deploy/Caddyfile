@@ -1,0 +1,34 @@
+# Tiny reverse proxy that puts the gateway (8000) and the Next.js
+# playground (3000) behind one origin on :3001. ngrok tunnels that
+# port so outside users hit a single https://larynx.ngrok.app.
+#
+# Next.js 15's built-in rewrite proxy drops the `Upgrade: websocket`
+# handshake, so the /v1/conversation WS has to be handled here
+# instead — Caddy's reverse_proxy is WS-native.
+
+{
+	auto_https off
+	admin :2019
+}
+
+:3001 {
+	log {
+		output file /tmp/caddy.log {
+			roll_size 10mb
+			roll_keep 3
+		}
+		format console
+		level INFO
+	}
+
+	# Gateway HTTP + WS. The matcher list covers every path the
+	# gateway currently exposes; anything else falls through to the
+	# Next.js dev server at :3000.
+	@gateway path /v1/* /health /ready /openapi.json /docs /metrics
+	reverse_proxy @gateway localhost:8000
+
+	# Everything else → Next.js playground. turbopack's HMR websocket
+	# upgrade also flows through this block (Caddy proxies the Upgrade
+	# header transparently).
+	reverse_proxy localhost:3000
+}
