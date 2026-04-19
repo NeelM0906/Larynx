@@ -19,8 +19,8 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "50m"
-        max-file: "5"
+        max-size: "100m"
+        max-file: "14"
 
   redis:
     image: redis:7-alpine
@@ -38,8 +38,8 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "50m"
-        max-file: "5"
+        max-size: "100m"
+        max-file: "14"
 
   # Fun-ASR STT worker — pinned to GPU 1 via CUDA_VISIBLE_DEVICES so it
   # never competes with VoxCPM2 (GPU 0). Opt-in (`--profile workers`) so
@@ -69,8 +69,8 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "50m"
-        max-file: "5"
+        max-size: "100m"
+        max-file: "14"
 
   # VAD + Punctuation worker — CPU only.
   vad_punc_worker:
@@ -91,8 +91,8 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "50m"
-        max-file: "5"
+        max-size: "100m"
+        max-file: "14"
 
 volumes:
   larynx-postgres-data:
