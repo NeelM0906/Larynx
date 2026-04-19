@@ -216,6 +216,15 @@ class SessionState(StrEnum):
 @dataclass
 class ConversationConfig:
     voice_id: str | None = None
+    # Voice conditioning resolved once by the route (voice_id → latents /
+    # lora_name via ``tts_service.resolve_conditioning``). The worker
+    # ignores ``voice_id``; every TTS call in the session must pass the
+    # same resolved conditioning so the voice character is stable across
+    # sentences. See PRD §5.6 + ORCHESTRATION.md.
+    ref_audio_latents: bytes | None = None
+    prompt_audio_latents: bytes | None = None
+    prompt_text: str = ""
+    lora_name: str | None = None
     llm_model: str = "anthropic/claude-haiku-4.5"
     system_prompt: str = ""
     # User-side PCM is 16kHz mono int16 — FunASR requirement.
@@ -684,6 +693,10 @@ class ConversationSession:
                 text=text,
                 sample_rate=self._cfg.output_sample_rate,
                 voice_id=self._cfg.voice_id,
+                ref_audio_latents=self._cfg.ref_audio_latents,
+                prompt_audio_latents=self._cfg.prompt_audio_latents,
+                prompt_text=self._cfg.prompt_text,
+                lora_name=self._cfg.lora_name,
                 cfg_value=self._cfg.cfg_value,
                 temperature=self._cfg.tts_temperature,
             ) as frames:
