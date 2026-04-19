@@ -47,11 +47,14 @@ import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, ValidationError
 
+from larynx_gateway.schemas.tts import TTSRequest
+from larynx_gateway.services import tts_service
 from larynx_gateway.services.conversation_service import (
     ConversationConfig,
     ConversationSession,
 )
 from larynx_gateway.services.llm_client import LLMClient
+from larynx_gateway.services.voice_library import VoiceLibrary
 from larynx_gateway.workers_client.funasr_client import FunASRClient
 from larynx_gateway.workers_client.vad_punc_client import VadPuncClient
 from larynx_gateway.workers_client.voxcpm_client import VoxCPMClient
@@ -128,9 +131,46 @@ async def ws_conversation(ws: WebSocket) -> None:
         await _send_error(ws, "invalid_config", str(e))
         return
 
+    voxcpm: VoxCPMClient = ws.app.state.voxcpm_client
+
+    # Resolve voice_id -> conditioning ONCE. The VoxCPM worker ignores the
+    # voice_id string; synthesis is deterministic only when ref_audio_latents
+    # (or lora_name) are passed. Resolving per-session and reusing the same
+    # conditioning on every sentence is what keeps the voice consistent —
+    # otherwise each sentence synthesises with random conditioning.
+    ref_latents: bytes | None = None
+    prompt_latents: bytes | None = None
+    prompt_text: str = ""
+    lora_name: str | None = None
+    if cfg_frame.voice_id is not None:
+        library = _build_library(ws)
+        tts_req = TTSRequest(
+            text="x",  # placeholder — resolve_conditioning only reads voice_id here
+            voice_id=cfg_frame.voice_id,
+            sample_rate=cfg_frame.output_sample_rate,
+        )
+        try:
+            conditioning = await tts_service.resolve_conditioning(
+                tts_req, library, voxcpm=voxcpm
+            )
+        except ValueError as e:
+            await _send_error(ws, "invalid_input", str(e))
+            return
+        if conditioning is None:
+            await _send_error(ws, "voice_not_found", f"voice_id={cfg_frame.voice_id!r}")
+            return
+        ref_latents = conditioning.ref_audio_latents
+        prompt_latents = conditioning.prompt_audio_latents
+        prompt_text = conditioning.prompt_text
+        lora_name = conditioning.lora_name
+
     default_model: str = getattr(ws.app.state, "llm_default_model", "anthropic/claude-haiku-4.5")
     cfg = ConversationConfig(
         voice_id=cfg_frame.voice_id,
+        ref_audio_latents=ref_latents,
+        prompt_audio_latents=prompt_latents,
+        prompt_text=prompt_text,
+        lora_name=lora_name,
         llm_model=cfg_frame.llm_model or default_model,
         system_prompt=cfg_frame.system_prompt,
         input_sample_rate=cfg_frame.input_sample_rate,
@@ -144,7 +184,6 @@ async def ws_conversation(ws: WebSocket) -> None:
 
     funasr: FunASRClient = ws.app.state.funasr_client
     vad: VadPuncClient = ws.app.state.vad_punc_client
-    voxcpm: VoxCPMClient = ws.app.state.voxcpm_client
     llm: LLMClient = ws.app.state.llm_client
 
     sink = _WSSink(ws)
@@ -198,3 +237,24 @@ async def _send_error(ws: WebSocket, code: str, message: str) -> None:
         await ws.send_text(json.dumps({"type": "error", "code": code, "message": message}))
     with contextlib.suppress(Exception):
         await ws.close()
+
+
+def _build_library(ws: WebSocket) -> VoiceLibrary:
+    """Construct a transient ``VoiceLibrary`` for this WS handler.
+
+    Mirrors ``routes/tts_stream._build_library``: WS routes don't chain
+    FastAPI dependencies, so we open a short-lived DB session for the
+    voice lookup. It's garbage-collected once the library goes out of
+    scope — we only need it for the one resolve call at session start.
+    """
+    from larynx_gateway.db.session import get_session_factory
+
+    session_factory = get_session_factory()
+    session = session_factory()
+    return VoiceLibrary(
+        session=session,
+        voxcpm=ws.app.state.voxcpm_client,
+        cache=ws.app.state.latent_cache,
+        data_dir=ws.app.state.data_dir,
+        design_ttl_s=ws.app.state.design_ttl_s,
+    )
