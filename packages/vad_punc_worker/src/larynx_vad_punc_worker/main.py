@@ -1,19 +1,23 @@
 """Standalone entrypoint for the VAD+Punctuation worker.
 
-Not used in M3 (the gateway starts this in-process). Kept here for the
-same reason as the VoxCPM / Fun-ASR main.py — when we split workers into
-their own supervisord programs the transport stays the same.
+Unused in the in-process gateway path — the gateway's lifespan starts
+``WorkerServer`` directly on a shared ``WorkerChannel``. This
+entrypoint is what supervisord runs when the worker is split into its
+own process (any CPU-only host is fine). Standalone-process only:
+this is where the Prometheus metrics sidecar binds :9102.
 """
 
 from __future__ import annotations
 
 import asyncio
+import signal
 
 import structlog
 from larynx_shared.ipc.client_base import WorkerChannel
 
+from larynx_vad_punc_worker.metrics_server import MetricsSidecar
 from larynx_vad_punc_worker.model_manager import VadPuncModelManager
-from larynx_vad_punc_worker.server import WorkerServer, install_signal_handlers
+from larynx_vad_punc_worker.server import WorkerServer
 
 log = structlog.get_logger(__name__)
 
@@ -22,9 +26,20 @@ async def _run() -> None:
     manager = await VadPuncModelManager.from_env()
     channel = WorkerChannel()
     server = WorkerServer(channel, manager)
-    install_signal_handlers(server)
+    sidecar = MetricsSidecar()
+
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop_event.set)
+
+    await sidecar.start()
     await server.start()
-    await asyncio.Event().wait()
+    try:
+        await stop_event.wait()
+    finally:
+        await server.stop()
+        await sidecar.stop()
 
 
 def main() -> None:

@@ -32,6 +32,7 @@ from larynx_shared.ipc.messages import (
 )
 
 from larynx_vad_punc_worker.audio_utils import pcm_to_float32
+from larynx_vad_punc_worker.metrics import record_error, record_request
 from larynx_vad_punc_worker.model_manager import VadPuncModelManager
 from larynx_vad_punc_worker.streaming_vad import StreamingVad, build_streaming_vad
 
@@ -89,7 +90,14 @@ class WorkerServer:
             task.add_done_callback(self._inflight.discard)
 
     async def _dispatch(self, msg: RequestMessage) -> None:
+        method = _method_name(msg)
+        t0 = time.perf_counter()
         response = await self._handle(msg)
+        duration_s = time.perf_counter() - t0
+        status_class = "error" if isinstance(response, ErrorMessage) else "ok"
+        record_request(method=method, duration_s=duration_s, status_class=status_class)
+        if isinstance(response, ErrorMessage):
+            record_error(method=method, error_code=response.code)
         await self._channel.responses.put(response)
 
     async def _handle(self, msg: RequestMessage) -> ResponseMessage | ErrorMessage:
@@ -218,6 +226,20 @@ class WorkerServer:
             return ErrorMessage(
                 request_id=req.request_id, code="vad_stream_close_failed", message=str(e)
             )
+
+
+def _method_name(msg: RequestMessage) -> str:
+    if isinstance(msg, DetectSegmentsRequest):
+        return "segment"
+    if isinstance(msg, PunctuateRequest):
+        return "punctuate"
+    if isinstance(msg, VadStreamOpenRequest):
+        return "vad_stream_open"
+    if isinstance(msg, VadStreamFeedRequest):
+        return "vad_stream_feed"
+    if isinstance(msg, VadStreamCloseRequest):
+        return "vad_stream_close"
+    return "unknown"
 
 
 def install_signal_handlers(server: WorkerServer) -> None:

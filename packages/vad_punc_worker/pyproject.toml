@@ -7,6 +7,14 @@ dependencies = [
     "larynx-shared",
     "numpy>=1.26",
     "structlog>=24.1",
+    # Prometheus sidecar (ORCHESTRATION-M8 §3.1). Same split as the
+    # Fun-ASR worker: prometheus-client owns the registry, aiohttp
+    # serves /metrics on :9102 when the worker runs standalone. The
+    # in-process gateway path doesn't import metrics_server, so aiohttp
+    # stays cold — but both deps have to be declared here so
+    # supervisord can import them at worker boot.
+    "prometheus-client>=0.20",
+    "aiohttp>=3.9",
 ]
 
 # FunASR pulls in torch (CPU wheel is fine — both fsmn-vad and ct-punc

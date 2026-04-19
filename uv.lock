@@ -2467,9 +2467,11 @@ name = "larynx-funasr-worker"
 version = "0.1.0"
 source = { editable = "packages/funasr_worker" }
 dependencies = [
+    { name = "aiohttp" },
     { name = "larynx-shared" },
     { name = "librosa" },
     { name = "numpy" },
+    { name = "prometheus-client" },
     { name = "soundfile" },
     { name = "structlog" },
 ]
@@ -2486,11 +2488,13 @@ gpu = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9" },
     { name = "flash-attn", marker = "extra == 'gpu'", url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" },
     { name = "funasr", marker = "extra == 'gpu'", specifier = ">=1.3.0" },
     { name = "larynx-shared", editable = "packages/shared" },
     { name = "librosa", specifier = ">=0.10" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "prometheus-client", specifier = ">=0.20" },
     { name = "soundfile", specifier = ">=0.12" },
     { name = "structlog", specifier = ">=24.1" },
     { name = "torch", marker = "extra == 'gpu'", specifier = ">=2.9,<2.10" },
@@ -2584,8 +2588,10 @@ name = "larynx-vad-punc-worker"
 version = "0.1.0"
 source = { editable = "packages/vad_punc_worker" }
 dependencies = [
+    { name = "aiohttp" },
     { name = "larynx-shared" },
     { name = "numpy" },
+    { name = "prometheus-client" },
     { name = "structlog" },
 ]
 
@@ -2599,10 +2605,12 @@ real = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9" },
     { name = "funasr", marker = "extra == 'real'", specifier = ">=1.3.0" },
     { name = "larynx-shared", editable = "packages/shared" },
     { name = "modelscope", marker = "extra == 'real'", specifier = ">=1.20" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "prometheus-client", specifier = ">=0.20" },
     { name = "structlog", specifier = ">=24.1" },
     { name = "torch", marker = "extra == 'real'", specifier = ">=2.9,<2.10" },
     { name = "torchaudio", marker = "extra == 'real'", specifier = ">=2.9,<2.10" },
