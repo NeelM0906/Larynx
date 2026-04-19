@@ -402,30 +402,49 @@ Replace the current `/ready` with a worker-aware implementation:
 ```json
 200 OK or 503 Service Unavailable
 {
-  "status": "ready"|"degraded"|"starting",
+  "status": "ready"|"starting"|"shutting_down",
+  "worker": "ready"|"starting",
   "workers": {
-    "voxcpm":   {"state": "ready", "last_heartbeat_s_ago": 1.2},
-    "funasr":   {"state": "ready", "last_heartbeat_s_ago": 0.8},
-    "vad_punc": {"state": "ready", "last_heartbeat_s_ago": 0.3},
-    "training": {"state": "idle",  "last_heartbeat_s_ago": 2.1}
+    "voxcpm":   {"state": "ready"},
+    "funasr":   {"state": "ready"},
+    "vad_punc": {"state": "ready"}
   },
-  "queues": {"batch": 12, "cron": 0},
-  "version": "0.8.0"
+  "queues": {"batch": 12},
+  "version": "0.3.0"
 }
 ```
 
-Heartbeat mechanism: each worker client (`VoxCPMClient`, `FunASRClient`,
-`VadPuncClient`) gains a `last_heartbeat_at: float` field updated on
-every successful response. A lifespan-started task pings each worker via
-a cheap `health_ping` IPC message every 5s to keep the timestamp fresh
-when idle.
+- `state=ready` iff the worker-client attribute was populated by the
+  lifespan startup; `state=missing` otherwise.
+- `status=ready` iff `worker_ready` is set and every expected worker is
+  `ready`; otherwise `status=starting` and the response is `503`.
+- `status=shutting_down` short-circuits to `503` during drain.
+- `queues.batch` is the current Redis queue depth; absent if Redis is
+  unreachable (the endpoint stays up so operators can still curl it).
+
+Worker failures mid-flight surface via request-path errors rather than
+/ready — for v1's single-box deployment that's enough signal and keeps
+the readiness check honest (we only report what we know).
+
+#### v1.5 extension — per-worker heartbeats
+
+When v1.5 adds real observability, each worker client gains a
+`last_heartbeat_at: float` field and `/ready` grows `last_heartbeat_s_ago`
+plus a three-tier state machine:
 
 - `state=ready` iff `last_heartbeat_s_ago < 15`
 - `state=degraded` iff `15 ≤ last_heartbeat_s_ago < 60`
 - `state=down` iff `last_heartbeat_s_ago ≥ 60`
-- `status=ready` iff every expected worker is `ready`; otherwise 503.
-- `training` is special — if no job is running, `state=idle` and the
-  overall status is still `ready`.
+- `training` worker reports `state=idle` when no job is running; that
+  still counts as `status=ready` overall.
+
+Two candidate heartbeat sources (decided at implementation time):
+stamping `last_heartbeat_at` from real request/stream traffic (no
+synthetic load, but silent when idle), or a lifespan-started 5s ping
+task via a cheap `health_ping` IPC message. v1 ships neither — the
+simple `{state: "ready" | "missing"}` shape above is the actual v1
+contract, and this subsection documents the forward plan so the doc
+doesn't overpromise what the code delivers.
 
 ### 3.3 supervisord + restart-backoff
 
@@ -625,7 +644,7 @@ Roughly 20 commits across the four parts. Order:
 12. `test(gateway): OpenAI SDK round-trip + format matrix`
 13. `feat(workers): metrics sidecar servers`
 14. `feat(gateway): metrics middleware + /metrics/workers proxy`
-15. `feat(gateway): worker heartbeat + structured /ready`
+15. `feat(gateway): structured /ready` (worker heartbeat deferred to v1.5, see §3.2)
 16. `feat(ops): supervisord restart alerter`
 17. `feat(gateway): body-size + timeout middleware`
 18. `feat(gateway): graceful shutdown drain`
