@@ -30,7 +30,7 @@ uv.lock.bak
 /third_party/
 *.wav
 *.mp3
-!packages/gateway/tests/fixtures/*.wav
+!packages/gateway/tests/fixtures/**/*.wav
 
 # Local session state — Claude Code plugin cache + scratch clones.
 # Never belongs in the repo; each developer's state is their own.
