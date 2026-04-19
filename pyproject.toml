@@ -110,6 +110,11 @@ dev = [
     # (test_openai_sdk_speech*.py). Keeps the SDK out of runtime deps; only
     # tests marked ``@pytest.mark.openai_sdk`` reach for it.
     "openai>=1.40",
+    # WER computation for the M0 smoke roundtrip regression test
+    # (test_m0_smoke_roundtrip.py → bugs/003 post-fix gate). Small,
+    # pure-Python; keeps the test self-contained without a hand-rolled
+    # Levenshtein.
+    "jiwer>=4.0",
 ]
 
 [tool.ruff]

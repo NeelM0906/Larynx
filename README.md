@@ -130,32 +130,23 @@ synthesis time on a 5-word sentence. Raw encode-cost isolation lives in
 
 ## Test suite state
 
-Last full run `RUN_REAL_MODEL=1 uv run pytest -m real_model -v`, 227 s:
+Running `RUN_REAL_MODEL=1 uv run pytest -m real_model -v` in a single
+invocation still hits bugs/002 (GPU memory accumulates across test
+modules). The supported way to run the suite is per-file, which is what
+`make test-real-per-file` does.
 
-```
-= 6 passed, 11 skipped, 299 deselected, 5 warnings, 6 errors in 227.30s =
-```
+Per-file results (2026-04-18, feat/m7-finetune HEAD):
 
-Per-file breakdown:
+| File | Passed | Skipped | Failed | Wall | Notes |
+|---|---:|---:|---:|---:|---|
+| `test_real_model.py` (voice CRUD + synth) | 5 | 0 | 0 | 22 s | clean |
+| `test_m0_smoke_roundtrip.py` (bugs/003) | 1 | 0 | 0 | 58 s | post-fix regression |
+| `test_real_model_stream.py` (streaming) | 5 | 0 | 0 | 135 s | 8-way concurrency verified |
+| `test_real_model_stt.py` (language routing) | 5 | 0 | 1 | 534 s | 1 failure = [bugs/004](./bugs/004_hotword_test_case_sensitivity.md) (case-sensitive assertion; hotword stem present in transcript) |
+| `test_real_model_conversation.py` | 0 | 6 | 0 | <1 s | skipped — set `OPENROUTER_API_KEY` in `.env` (pytest-dotenv now loads it) to unskip |
 
-| File | Passed | Skipped | Error | Notes |
-|---|---:|---:|---:|---|
-| `test_real_model.py` (voice CRUD + synth) | 5 | 0 | 0 | clean |
-| `test_m0_smoke_roundtrip.py` (bugs/003) | 1 | 0 | 0 | new post-fix regression |
-| `test_real_model_stream.py` (streaming) | 0 | 5 | 0 | skipped in full-suite run; **all 5 pass in isolation** (see below) |
-| `test_real_model_conversation.py` | 0 | 6 | 0 | skipped — `OPENROUTER_API_KEY` not in pytest subshell |
-| `test_real_model_stt.py` (language routing) | 0 | 0 | 6 | OOM at fixture setup — bugs/002 GPU accumulation |
-
-Run `test_real_model_stream.py` alone (135 s):
-
-```
-5 passed, 15 warnings in 135.92s (0:02:15)
-  test_tts_stream_ttfb_distribution
-  test_stt_stream_end_to_end_via_synthesized_audio
-  test_stt_stream_four_concurrent_sessions
-  test_stt_concurrent_transcribe_rolling_does_not_deadlock
-  test_stt_stream_eight_concurrent_sessions
-```
+Totals: **16 passed, 6 skipped, 1 failed, 0 errors** across the five
+real-model files. Before this branch: 6 / 11 / 0 / 6.
 
 Unit-test suites (no real model required):
 
@@ -177,6 +168,7 @@ Living file under [bugs/](./bugs/). Current state:
 | [bugs/001](./bugs/001_concurrent_stt.md) — concurrent STT deadlock | **fixed** | v1 blocker | Four concurrent `FunASRNano.inference()` calls from `asyncio.to_thread` deadlocked vLLM's shared LLM. Fix: `asyncio.Lock` on `FunASRBackendReal` + teardown-safe `finally` in `STTStreamSession.run()`. 8-way concurrency verified. |
 | [bugs/002](./bugs/002_full_real_model_suite_gpu_accumulation.md) — real_model suite GPU accumulation | **filed, not fixed** | test-infra only (prod unaffected) | Running all real_model test modules in one pytest invocation leaks GPU memory across modules; `LARYNX_STT_MODE` env var leaks too. Workaround: run files separately. |
 | [bugs/003](./bugs/003_stt_m0_garble.md) — M0 smoke STT garble | **fixed** | M0 smoke artefact | `scripts/m0/smoke_tts.py` wrote WAVs at 16 kHz via a `getattr()` fallback; VoxCPM2 native output is 48 kHz, so Fun-ASR saw 3× slowed audio and garbled. Fix: query `server.get_model_info()["output_sample_rate"]` and resample via librosa `soxr_hq`. Post-fix WER 0.000. |
+| [bugs/004](./bugs/004_hotword_test_case_sensitivity.md) — hotword-recovery test case-sensitive | **filed, not fixed** | test-assertion tightness (prod OK) | `test_hotword_recovery` asserts `"Larynx" in text` but Fun-ASR returns lowercased proper noun (`"larynx"`); hotword stem is correctly present, just not capitalised. Fix options in § 4. |
 
 ---
 
@@ -213,16 +205,13 @@ template.
 
 ## Known open items (not blocking v1)
 
-1. **bugs/002** — real_model full-suite GPU accumulation. Low priority;
-   workaround is to run test files separately.
-2. **OPENROUTER_API_KEY** — not wired into pytest subshell, so 6 real-model
-   conversation tests skip. Conversation tests have never run on real
-   hardware yet. Flagged in VERIFICATION_REPORT.md §5.
-3. **test_real_model_stt.py fixtures** — `packages/gateway/tests/fixtures/audio/`
-   lacks actual audio fixtures; the 6 tests in that file can't exercise
-   real audio inputs until those land.
-4. **M8 — batch + OpenAI shim + hardening + 24h soak** — designed in
+1. **M8 — batch + OpenAI shim + hardening + 24h soak** — designed in
    ORCHESTRATION-M8.md, not yet implemented.
+
+Test-infra only, not product gaps: [bugs/002](./bugs/002_full_real_model_suite_gpu_accumulation.md)
+(run `make test-real-per-file` instead of `make test-real`) and
+[bugs/004](./bugs/004_hotword_test_case_sensitivity.md) (test assertion
+tightness, hotword feature works).
 
 ---
 
