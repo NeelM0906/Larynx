@@ -612,7 +612,7 @@ class VoxCPMModelManager:
             log.info("voxcpm.mode", mode="mock")
             return cls(MockVoxCPMBackend())
 
-        gpu = int(os.environ.get("LARYNX_VOXCPM_GPU", "0"))
+        gpu = int(os.environ.get("LARYNX_VOXCPM_GPU", "1"))
         model_ref = os.environ.get("LARYNX_VOXCPM_MODEL", "openbmb/VoxCPM2")
 
         # LoRA config is opt-in via LARYNX_VOXCPM_LORA_ENABLED so non-M7
@@ -635,7 +635,12 @@ class VoxCPMModelManager:
             max_num_batched_tokens=int(os.environ.get("LARYNX_VOXCPM_MAX_BATCHED_TOKENS", "8192")),
             max_num_seqs=int(os.environ.get("LARYNX_VOXCPM_MAX_NUM_SEQS", "16")),
             max_model_len=int(os.environ.get("LARYNX_VOXCPM_MAX_MODEL_LEN", "4096")),
-            gpu_memory_utilization=float(os.environ.get("LARYNX_VOXCPM_GPU_MEM_UTIL", "0.80")),
+            # vLLM pre-allocates this fraction of the target GPU's VRAM as
+            # non-reclaimable KV cache. 0.15 on a 96 GB card is ~14 GB —
+            # enough for VoxCPM2's weights + streaming KV for one session
+            # with room to spare. Raise this via LARYNX_VOXCPM_GPU_MEM_UTIL
+            # on smaller cards (<16 GB) or for multi-stream throughput.
+            gpu_memory_utilization=float(os.environ.get("LARYNX_VOXCPM_GPU_MEM_UTIL", "0.15")),
             lora_config=lora_config,
         )
         await backend.load()

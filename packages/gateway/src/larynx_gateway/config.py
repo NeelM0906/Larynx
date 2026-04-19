@@ -24,7 +24,11 @@ class Settings(BaseSettings):
 
     # TTS worker
     larynx_tts_mode: str = Field(default="mock")  # "mock" | "voxcpm"
-    larynx_voxcpm_gpu: int = 0
+    # VoxCPM2 is a 2B-param model (~8 GB weights in bf16). We pin it to
+    # GPU 1 by default so GPU 0 is free for other workloads (video
+    # models, fine-tuning, etc.) — voice stack is small enough to share
+    # one card with STT.
+    larynx_voxcpm_gpu: int = 1
     larynx_voxcpm_model: str = "openbmb/VoxCPM2"
     larynx_voxcpm_inference_timesteps: int = 10
     larynx_default_sample_rate: int = 24000
@@ -32,7 +36,12 @@ class Settings(BaseSettings):
     # STT worker (Fun-ASR-Nano + Fun-ASR-MLT-Nano)
     larynx_stt_mode: str = Field(default="mock")  # "mock" | "funasr"
     larynx_funasr_gpu: int = 1  # GPU 1 by PRD §6
-    larynx_funasr_gpu_mem_util: float = 0.4
+    # Fun-ASR-Nano's vLLM KV cache — pre-allocated, non-reclaimable.
+    # 0.10 gives plenty of KV for one concurrent session on an 80+ GB
+    # card (~8 GB) while leaving the rest for other workloads. Raise
+    # via LARYNX_FUNASR_GPU_MEM_UTIL on smaller cards or higher
+    # concurrency.
+    larynx_funasr_gpu_mem_util: float = 0.10
 
     # VAD + Punctuation worker
     larynx_vad_punc_mode: str = Field(default="mock")  # "mock" | "real"
