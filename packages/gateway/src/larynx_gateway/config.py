@@ -87,6 +87,15 @@ class Settings(BaseSettings):
     larynx_cleanup_interval_s: int = 86400
     larynx_cleanup_initial_delay_s: int = 60
 
+    # Worker metrics sidecar URLs scraped by /metrics/workers (§3.1,
+    # §7.2). Pointed at the default funasr/vad_punc sidecar ports when
+    # the workers run as their own supervisord programs; in the
+    # in-process gateway path the scrape comes back as a comment stub
+    # (no sidecar listening) and the endpoint still returns 200 so
+    # operators can tell the difference from a gateway-level outage.
+    larynx_funasr_metrics_url: str = "http://127.0.0.1:9101/metrics"
+    larynx_vad_punc_metrics_url: str = "http://127.0.0.1:9102/metrics"
+
     # Logging
     larynx_log_level: str = "INFO"
     larynx_log_json: bool = True
