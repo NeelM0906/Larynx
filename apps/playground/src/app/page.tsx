@@ -2,13 +2,23 @@ import Link from "next/link";
 import { TABS, type TabLabel } from "@/lib/tabs";
 
 const BLURBS: Record<TabLabel, string> = {
-  TTS: "Prompt the gateway, pick a voice, tune cfg_value & inference steps, hear it back.",
-  Clone: "Upload a reference clip, name it, test-synthesize a line with the fresh voice.",
+  TTS: "Prompt the gateway, pick a voice, tune cfg_value & temperature, hear it back.",
+  Clone: "Upload a reference clip, name it, then test-synthesize with the fresh voice.",
   Design: "Describe the voice in prose, preview it, save it to the library.",
-  Library: "Every voice in Postgres: reference audio, use count, delete.",
+  Library: "Every voice in Postgres. Test one, delete one, or clone a fresh one.",
   Conversation: "Duplex WebSocket: mic in, VAD → STT → LLM → TTS, live state & transcript.",
   Transcribe: "Upload or record, pick language + hotwords, get the transcript.",
-  "Fine-tune": "Reserved for M7 — placeholder lives here until the training worker lands.",
+  "Fine-tune": "Drop a dataset, pick a name, watch a LoRA train, land in the library.",
+};
+
+const STATUS: Record<TabLabel, string> = {
+  TTS: "Ready",
+  Clone: "Ready",
+  Library: "Ready",
+  "Fine-tune": "Ready",
+  Design: "Coming soon",
+  Transcribe: "Coming soon",
+  Conversation: "Coming soon",
 };
 
 export default function Home() {
@@ -40,8 +50,14 @@ export default function Home() {
               <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-muted-foreground/80 group-hover:text-primary transition-colors">
                 {t.n}
               </span>
-              <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground/40 group-hover:text-muted-foreground transition-colors">
-                {t.label === "Fine-tune" ? "M7 · soon" : "M6"}
+              <span
+                className={`font-mono text-[10px] uppercase tracking-[0.2em] transition-colors ${
+                  STATUS[t.label] === "Ready"
+                    ? "text-muted-foreground/60 group-hover:text-muted-foreground"
+                    : "text-muted-foreground/30 group-hover:text-muted-foreground/60"
+                }`}
+              >
+                {STATUS[t.label]}
               </span>
             </div>
             <h2 className="mt-6 font-display text-3xl italic text-foreground">

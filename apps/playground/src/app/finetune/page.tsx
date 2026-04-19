@@ -4,7 +4,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PageShell } from "@/components/page-shell";
 import { apiFetch, ApiError } from "@/lib/api-client";
+import { humanizeApiError, type HumanizedError } from "@/lib/errors";
+import { ErrorPanel } from "@/components/error-panel";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { getToken } from "@/lib/token";
+
+const MAX_DATASET_BYTES = 500 * 1024 * 1024;
 
 const BASE_URL = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "";
 
@@ -44,7 +57,7 @@ export default function FinetunePage() {
   // Upload state.
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<HumanizedError | null>(null);
   const [datasetId, setDatasetId] = useState<string | null>(null);
   const [report, setReport] = useState<PhaseAReport | null>(null);
 
@@ -54,13 +67,15 @@ export default function FinetunePage() {
   const [loraAlpha, setLoraAlpha] = useState(32);
   const [numIters, setNumIters] = useState(1000);
   const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<HumanizedError | null>(null);
 
   // Watch state.
   const [jobId, setJobId] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [lastState, setLastState] = useState<StateEvent | null>(null);
   const [terminal, setTerminal] = useState<TerminalEvent | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   // --- Upload -----------------------------------------------------------
@@ -93,10 +108,8 @@ export default function FinetunePage() {
           setStep("validate");
           return;
         }
-        setUploadError(JSON.stringify(body.detail ?? body));
-      } else {
-        setUploadError(String(e));
       }
+      setUploadError(humanizeApiError(e));
     } finally {
       setUploading(false);
     }
@@ -124,7 +137,7 @@ export default function FinetunePage() {
       setJobId(resp.job_id);
       setStep("watch");
     } catch (e) {
-      setSubmitError(String(e));
+      setSubmitError(humanizeApiError(e));
     } finally {
       setSubmitting(false);
     }
@@ -213,13 +226,17 @@ export default function FinetunePage() {
   // --- Cancel ----------------------------------------------------------
 
   const handleCancel = useCallback(async () => {
-    if (!jobId) return;
+    if (!jobId || cancelling) return;
+    setCancelling(true);
+    setConfirmingCancel(false);
     try {
       await apiFetch(`/v1/finetune/jobs/${jobId}`, { method: "DELETE" });
     } catch {
       /* swallow — the SSE stream will report the terminal state */
     }
-  }, [jobId]);
+    // Leave cancelling=true until the SSE stream emits terminal;
+    // the button copy reflects the pending state until then.
+  }, [jobId, cancelling]);
 
   // --- Rendering -------------------------------------------------------
 
@@ -278,11 +295,58 @@ export default function FinetunePage() {
             lastState={lastState}
             terminal={terminal}
             maxSteps={numIters}
-            onCancel={handleCancel}
+            cancelling={cancelling}
+            onRequestCancel={() => setConfirmingCancel(true)}
           />
         )}
       </div>
+      <CancelDialog
+        open={confirmingCancel}
+        onOpenChange={setConfirmingCancel}
+        onConfirm={handleCancel}
+        currentStep={lastState?.step ?? 0}
+        maxSteps={numIters}
+      />
     </PageShell>
+  );
+}
+
+function CancelDialog({
+  open,
+  onOpenChange,
+  onConfirm,
+  currentStep,
+  maxSteps,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onConfirm: () => void;
+  currentStep: number;
+  maxSteps: number;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md border-border/80">
+        <DialogHeader>
+          <DialogTitle className="font-display text-2xl italic font-normal leading-none pt-2">
+            Cancel training?
+          </DialogTitle>
+          <DialogDescription className="pt-1">
+            The worker will be asked to stop at the next checkpoint. Any
+            progress through step {currentStep} / {maxSteps} is lost and no
+            voice is registered.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="mt-2 gap-2">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Keep training
+          </Button>
+          <Button variant="destructive" onClick={onConfirm}>
+            Cancel job
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -348,10 +412,12 @@ function UploadStep(props: {
   files: File[];
   setFiles: (f: File[]) => void;
   uploading: boolean;
-  uploadError: string | null;
+  uploadError: HumanizedError | null;
   onUpload: () => void;
 }) {
   const { files, setFiles, uploading, uploadError, onUpload } = props;
+  const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+  const overLimit = totalBytes > MAX_DATASET_BYTES;
   return (
     <section className="flex flex-col gap-4">
       <label
@@ -363,6 +429,9 @@ function UploadStep(props: {
           .wav / .flac / .mp3 files + an optional ``transcripts.jsonl``. If you skip the
           manifest we&rsquo;ll transcribe every clip for you during preparation.
         </p>
+        <p className="mt-2 text-[11px] font-mono uppercase tracking-widest text-muted-foreground/70">
+          Max 500 MB total across all files.
+        </p>
         <input
           id="ft-files"
           type="file"
@@ -373,23 +442,33 @@ function UploadStep(props: {
         />
       </label>
       {files.length > 0 && (
-        <ul className="max-h-40 overflow-auto rounded-md border border-border bg-muted/30 p-3 text-xs font-mono">
-          {files.map((f) => (
-            <li key={`${f.name}-${f.size}`} className="flex justify-between gap-2">
-              <span>{f.name}</span>
-              <span className="text-muted-foreground">{(f.size / 1024).toFixed(1)} KB</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul className="max-h-40 overflow-auto rounded-md border border-border bg-muted/30 p-3 text-xs font-mono">
+            {files.map((f) => (
+              <li key={`${f.name}-${f.size}`} className="flex justify-between gap-2">
+                <span>{f.name}</span>
+                <span className="text-muted-foreground">
+                  {f.size > 1024 * 1024
+                    ? `${(f.size / (1024 * 1024)).toFixed(2)} MB`
+                    : `${(f.size / 1024).toFixed(1)} KB`}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p
+            className={`text-[11px] font-mono ${
+              overLimit ? "text-destructive" : "text-muted-foreground"
+            }`}
+          >
+            Total {(totalBytes / (1024 * 1024)).toFixed(1)} MB / 500 MB
+            {overLimit && " · over the body limit, trim before uploading"}
+          </p>
+        </>
       )}
-      {uploadError && (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-          {uploadError}
-        </p>
-      )}
+      <ErrorPanel error={uploadError} />
       <button
         type="button"
-        disabled={files.length === 0 || uploading}
+        disabled={files.length === 0 || uploading || overLimit}
         onClick={onUpload}
         className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
       >
@@ -479,7 +558,7 @@ function ConfigureStep(props: {
   numIters: number;
   setNumIters: (n: number) => void;
   submitting: boolean;
-  submitError: string | null;
+  submitError: HumanizedError | null;
   onBack: () => void;
   onSubmit: () => void;
 }) {
@@ -538,11 +617,7 @@ function ConfigureStep(props: {
         onChange={setNumIters}
         hint="Upstream default is 1000. Larger datasets want more iterations."
       />
-      {submitError && (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-          {submitError}
-        </p>
-      )}
+      <ErrorPanel error={submitError} />
       <div className="flex gap-3">
         <button
           type="button"
@@ -602,16 +677,46 @@ function WatchStep(props: {
   lastState: StateEvent | null;
   terminal: TerminalEvent | null;
   maxSteps: number;
-  onCancel: () => void;
+  cancelling: boolean;
+  onRequestCancel: () => void;
 }) {
-  const { jobId, logs, lastState, terminal, maxSteps, onCancel } = props;
+  const { jobId, logs, lastState, terminal, maxSteps, cancelling, onRequestCancel } = props;
   const progress = lastState
     ? Math.min(1, Math.max(0, lastState.step / Math.max(1, maxSteps)))
     : 0;
   const logsRef = useRef<HTMLPreElement | null>(null);
+
+  // Stick-to-bottom: only auto-scroll if the user hasn't scrolled up.
+  // We consider "at bottom" anything within ~12 px of the actual end.
+  const stickRef = useRef(true);
   useEffect(() => {
-    if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
+    const pre = logsRef.current;
+    if (!pre) return;
+    const onScroll = () => {
+      const distanceFromBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight;
+      stickRef.current = distanceFromBottom < 12;
+    };
+    pre.addEventListener("scroll", onScroll, { passive: true });
+    return () => pre.removeEventListener("scroll", onScroll);
+  }, []);
+  useEffect(() => {
+    const pre = logsRef.current;
+    if (!pre) return;
+    if (stickRef.current) pre.scrollTop = pre.scrollHeight;
   }, [logs.length]);
+
+  const onDownloadLogs = useCallback(() => {
+    const blob = new Blob([logs.join("\n") + "\n"], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `finetune-${jobId.slice(0, 8)}-logs.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, [logs, jobId]);
+
   return (
     <section className="flex flex-col gap-4">
       <div className="rounded-md border border-border bg-muted/30 p-4">
@@ -623,7 +728,7 @@ function WatchStep(props: {
         </div>
         <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-border">
           <div
-            className="h-full bg-primary transition-all"
+            className="h-full bg-primary transition-[width] duration-500 ease-out"
             style={{ width: `${(progress * 100).toFixed(1)}%` }}
           />
         </div>
@@ -635,21 +740,35 @@ function WatchStep(props: {
           </p>
         )}
       </div>
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+          Training log
+        </span>
+        <button
+          type="button"
+          onClick={onDownloadLogs}
+          disabled={logs.length === 0}
+          className="rounded-md border border-border px-3 py-1 text-[11px] font-mono uppercase tracking-widest text-muted-foreground hover:bg-muted disabled:opacity-50"
+        >
+          Download log
+        </button>
+      </div>
       <pre
         ref={logsRef}
         className="h-72 overflow-auto rounded-md border border-border bg-black/90 p-3 text-xs text-emerald-200"
       >
-        {logs.join("\n")}
+        {logs.length > 0 ? logs.join("\n") : "Waiting for first log line…"}
       </pre>
       {terminal ? (
         <Terminal terminal={terminal} />
       ) : (
         <button
           type="button"
-          onClick={onCancel}
-          className="self-start rounded-md border border-destructive/40 px-4 py-2 text-sm text-destructive"
+          onClick={onRequestCancel}
+          disabled={cancelling}
+          className="self-start rounded-md border border-destructive/40 px-4 py-2 text-sm text-destructive disabled:opacity-60"
         >
-          Cancel job
+          {cancelling ? "Cancelling…" : "Cancel job"}
         </button>
       )}
     </section>
