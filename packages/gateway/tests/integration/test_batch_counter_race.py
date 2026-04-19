@@ -11,12 +11,14 @@ because the terminal transition is gated on the counter.
 This test reproduces the race directly by firing N concurrent bumps
 against a seeded job row using the real async SQLAlchemy engine + real
 Postgres. Unlike the higher-level ``test_batch_create_and_run`` (which
-flakes ~1-in-3 full-suite runs), this test fails with near-100%
+used to flake ~1-in-3 full-suite runs), this test fails with near-100%
 probability pre-fix — the concurrent gather guarantees the event loop
 interleaves every SELECT ahead of any COMMIT.
 
-Marked xfail(strict=True) on the branch point; the next commit flips
-it to PASS once the atomic UPDATE ... RETURNING fix lands.
+Post-fix: ``_bump_counters_and_maybe_finish`` uses
+``UPDATE ... RETURNING`` so Postgres' row lock serializes the
+concurrent bumps. Every increment lands; the terminal transition
+fires when the post-increment total reaches ``num_items``.
 """
 
 from __future__ import annotations
@@ -25,7 +27,6 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 
-import pytest
 from httpx import AsyncClient
 from larynx_gateway.db.models import BatchJob
 from larynx_gateway.db.session import get_session_factory
@@ -57,7 +58,6 @@ async def _read_job(job_id: str) -> BatchJob:
         return (await session.execute(select(BatchJob).where(BatchJob.id == job_id))).scalar_one()
 
 
-@pytest.mark.xfail(strict=True, reason="bugs/005 — counter read-modify-write race pending fix")
 async def test_concurrent_done_bumps_preserve_total(
     client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
@@ -84,7 +84,6 @@ async def test_concurrent_done_bumps_preserve_total(
     )
 
 
-@pytest.mark.xfail(strict=True, reason="bugs/005 — counter read-modify-write race pending fix")
 async def test_concurrent_mixed_bumps_transition_to_terminal(
     client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:

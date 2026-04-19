@@ -118,19 +118,84 @@ An `asyncio.Lock` keyed by `job_id` in the consumer process. Only
 helps because the two consumers share a process; would fall over if
 a future v1.x sprouts a second gateway replica. 3.1 is preferred.
 
-## § 4. Scope
+## § 4. Resolution — 2026-04-19
 
-- **Workaround:** existing — the test is flaky, the prod impact is a
-  job stuck at `RUNNING` with `num_completed = num_items - 1`. The
-  per-day cleanup cron doesn't evict `RUNNING` jobs, so the stuck row
-  would persist until manually reconciled.
-- **Fix owner:** next batch-service touch. Not blocking M8 ship
-  because it's a pre-existing bug on `origin/main` (observed in
-  `feat/m8` at branch-time but present before) and the flake rate is
-  low enough to retry in CI.
-- **Regression test:** a 100-consumer stress test on a 500-item batch
-  would catch it; the current suite only hits 10 items with 2
-  consumers which masks it except under coincidence.
+**Status:** fixed on branch `feat/m8-bugs-005`. Option 3.1 (atomic
+`UPDATE ... RETURNING`) chosen as recommended.
+
+**Fix commit:** `9342d95 fix(gateway): atomic counter updates in batch
+state machine (bugs/005)`.
+
+**Regression test:**
+`packages/gateway/tests/integration/test_batch_counter_race.py`
+landed in commit `8624428` as xfail(strict=True) to confirm the race
+reproduces under concurrent load; the xfail marker was flipped to
+PASS in commit 3 of the fix series. The test fires 20 concurrent
+`_bump_counters_and_maybe_finish` calls via independent sessions off
+the shared session factory and asserts every increment lands — this
+reproduced the race 100% of the time pre-fix (vs. ~1-in-3 for the
+higher-level `test_batch_create_and_run` flake).
+
+**Summary of the fix:** the read-modify-write pair
+
+```python
+job = (await session.execute(select(BatchJob)...)).scalar_one()
+job.num_completed += delta_done
+job.num_failed    += delta_failed
+await session.commit()
+```
+
+is replaced with a single SQL statement:
+
+```python
+result = await session.execute(
+    update(BatchJob)
+    .where(BatchJob.id == job_id)
+    .values(
+        num_completed=BatchJob.num_completed + delta_done,
+        num_failed=BatchJob.num_failed + delta_failed,
+    )
+    .returning(
+        BatchJob.num_completed,
+        BatchJob.num_failed,
+        BatchJob.num_items,
+        BatchJob.state,
+    )
+)
+row = result.one()
+```
+
+Postgres row-locks for the `UPDATE ... RETURNING` duration, so
+concurrent callers serialize at the database level — every delta
+lands, no matter the coroutine interleaving. The post-increment
+values come back in the same round trip, feeding the terminal
+transition without a second SELECT.
+
+The terminal state transition stays as a separate `UPDATE`, guarded
+by `state NOT IN ('COMPLETED', 'CANCELLED', 'FAILED')` so a concurrent
+sibling's terminal write is a no-op and `cancel_job` racing ahead
+can't be clobbered.
+
+**Defence-in-depth:** no nightly reconciler added. The atomic fix
+prevents new stuck jobs; the race reportedly never fired on
+real-hardware production loads before discovery (only in the test
+suite). A reconciler can be added in v1.1+ if stuck `RUNNING` rows
+ever show up in production logs — see the deferred discussion in the
+original prompt's Step 5.
+
+**Scope note (pre-fix, preserved for context):**
+
+- **Workaround:** existing — the test was flaky, the prod impact was
+  a job stuck at `RUNNING` with `num_completed = num_items - 1`. The
+  per-day cleanup cron doesn't evict `RUNNING` jobs, so a stuck row
+  would have persisted until manually reconciled.
+- **Regression test coverage improved:** the new
+  `test_batch_counter_race.py` exercises 20 concurrent bumps on a
+  single job; the pre-existing `test_batch_create_and_run` uses only
+  10 items with 2 consumers, which masks the race except under
+  coincidence. The two tests are complementary — one proves the fix
+  under synthesized worst-case concurrency, the other proves the
+  higher-level consumer path is stable.
 
 ## § 5. Surface where discovered
 
