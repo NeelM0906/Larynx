@@ -44,7 +44,7 @@ import psutil
 
 # soak_utils ships corpus + sampling helpers we reuse.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from soak_utils.sampling import sample_processes  # noqa: E402
+from soak_utils.sampling import sample_gpus, sample_processes  # noqa: E402
 
 
 @dataclass
@@ -70,12 +70,16 @@ def _free_port() -> int:
 
 
 def _spawn_gateway(*, port: int, token: str, data_dir: pathlib.Path) -> subprocess.Popen[bytes]:
+    # Inherit the caller's env so a real-mode run propagates
+    # LARYNX_TTS_MODE=voxcpm / LARYNX_STT_MODE=funasr /
+    # LARYNX_VAD_PUNC_MODE=real into the drain-test subprocess. Only
+    # port/data_dir/token are overridden per-run; everything else
+    # stays whatever the operator set. When running Phase 2 alongside
+    # a real-mode main gateway on a single-GPU host, skip Phase 2
+    # (``--skip 2``) to avoid VRAM contention from two VoxCPM loads.
     env = {
         **os.environ,
         "LARYNX_API_TOKEN": token,
-        "LARYNX_TTS_MODE": "mock",
-        "LARYNX_STT_MODE": "mock",
-        "LARYNX_VAD_PUNC_MODE": "mock",
         "LARYNX_DATA_DIR": str(data_dir),
         "LARYNX_PORT": str(port),
         "LARYNX_LOG_JSON": "0",
@@ -84,6 +88,12 @@ def _spawn_gateway(*, port: int, token: str, data_dir: pathlib.Path) -> subproce
         ),
         "REDIS_URL": os.environ.get("REDIS_URL", "redis://localhost:6380/0"),
     }
+    # Only fall back to mock worker modes when the caller hasn't set
+    # them — guarantees the drain subprocess boots even on a CPU-only
+    # dev box without the GPU extra installed.
+    env.setdefault("LARYNX_TTS_MODE", "mock")
+    env.setdefault("LARYNX_STT_MODE", "mock")
+    env.setdefault("LARYNX_VAD_PUNC_MODE", "mock")
     proc = subprocess.Popen(
         [
             "uv",
@@ -112,6 +122,39 @@ async def _wait_for_ready(url: str, *, timeout_s: float = 30.0) -> bool:
                     return True
             await asyncio.sleep(0.25)
     return False
+
+
+async def _probe_mode(url: str, token: str) -> dict[str, Any]:
+    """Return a compact snapshot of the gateway's current worker modes + GPUs.
+
+    Captured once at the top of a run so the report can't be misread as
+    "mock-mode-ish pass" when it was really driven against real workers.
+    """
+    snapshot: dict[str, Any] = {"env": {}, "workers": {}, "gpus": []}
+    for key in ("LARYNX_TTS_MODE", "LARYNX_STT_MODE", "LARYNX_VAD_PUNC_MODE"):
+        val = os.environ.get(key)
+        if val is not None:
+            snapshot["env"][key] = val
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{url}/ready", headers={"Authorization": f"Bearer {token}"})
+            if r.status_code == 200:
+                body = r.json()
+                snapshot["workers"] = body.get("workers", {})
+                snapshot["version"] = body.get("version")
+    except httpx.HTTPError as e:
+        snapshot["error"] = str(e)
+    # nvidia-smi: returns [] on CPU-only hosts, so the absence tells the
+    # same story as a missing worker sidecar elsewhere in the system.
+    snapshot["gpus"] = [
+        {
+            "gpu": row.labels.get("gpu"),
+            "metric": row.metric,
+            "value": row.value,
+        }
+        for row in sample_gpus()
+    ]
+    return snapshot
 
 
 # ── Phase 1: load run ────────────────────────────────────────────────
@@ -318,6 +361,10 @@ async def phase3_mem_delta(url: str, token: str, num_reqs: int) -> PhaseResult:
         # as "uvicorn" instead). Fall back to the current process's own
         # children.
         before = {p.pid: p.memory_info().rss for p in psutil.Process().children(recursive=True)}
+    gpu_before = [
+        {"index": r.labels.get("index"), "metric": r.metric, "value": r.value}
+        for r in sample_gpus()
+    ]
 
     headers = {"Authorization": f"Bearer {token}"}
     body = {"text": "mem delta probe.", "response_format": "wav"}
@@ -340,6 +387,10 @@ async def phase3_mem_delta(url: str, token: str, num_reqs: int) -> PhaseResult:
     after = _larynx_rss_by_pid() or {
         p.pid: p.memory_info().rss for p in psutil.Process().children(recursive=True)
     }
+    gpu_after = [
+        {"index": r.labels.get("index"), "metric": r.metric, "value": r.value}
+        for r in sample_gpus()
+    ]
 
     deltas: list[dict[str, Any]] = []
     flagged: list[dict[str, Any]] = []
@@ -365,6 +416,8 @@ async def phase3_mem_delta(url: str, token: str, num_reqs: int) -> PhaseResult:
         "requests_failed": fail,
         "per_process_deltas": deltas,
         "flagged_processes": flagged,
+        "gpu_before": gpu_before,
+        "gpu_after": gpu_after,
     }
     result.passed = fail == 0 and not flagged
     return result
@@ -418,8 +471,28 @@ def _format_result(r: PhaseResult) -> str:
     return "\n".join(lines)
 
 
+def _summarise_mode(probe: dict[str, Any]) -> str:
+    """Render a one-line mode banner for the report header."""
+    env = probe.get("env") or {}
+    workers = probe.get("workers") or {}
+    worker_bits = [f"{name}={info.get('state', '?')}" for name, info in sorted(workers.items())]
+    env_bits = [f"{k.removeprefix('LARYNX_').lower()}={v}" for k, v in sorted(env.items())]
+    gpus = probe.get("gpus") or []
+    gpu_count = len({g.get("gpu") for g in gpus}) if gpus else 0
+    parts = []
+    if env_bits:
+        parts.append("env(" + ", ".join(env_bits) + ")")
+    if worker_bits:
+        parts.append("workers(" + ", ".join(worker_bits) + ")")
+    parts.append(f"gpus={gpu_count}")
+    return " · ".join(parts)
+
+
 def write_report(
-    out_dir: pathlib.Path, results: list[PhaseResult], started_at: float
+    out_dir: pathlib.Path,
+    results: list[PhaseResult],
+    started_at: float,
+    probe: dict[str, Any] | None = None,
 ) -> pathlib.Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     report_path = pathlib.Path("STAGING_VERIFICATION_REPORT.md")
@@ -436,14 +509,30 @@ def write_report(
         f"**Run timestamp:** {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(started_at))}",
         f"**Total duration:** {total_duration:.1f}s",
         f"**Verdict:** **{verdict}**",
-        "",
-        "Replacement for the 24h soak per ORCHESTRATION-M8.md §7.3. This is ",
-        "not a substitute for a long-horizon soak — it catches Part C hardening ",
-        "issues and gross leaks, not 18-hour GPU accumulation or slow drifts.",
-        "",
-        "## Phase results",
-        "",
     ]
+    if probe is not None:
+        lines.append(f"**Gateway mode:** {_summarise_mode(probe)}")
+    lines.extend(
+        [
+            "",
+            "Replacement for the 24h soak per ORCHESTRATION-M8.md §7.3. This is ",
+            "not a substitute for a long-horizon soak — it catches Part C hardening ",
+            "issues and gross leaks, not 18-hour GPU accumulation or slow drifts.",
+            "",
+        ]
+    )
+    if probe is not None:
+        lines.extend(
+            [
+                "## Gateway snapshot (start of run)",
+                "",
+                "```json",
+                json.dumps(probe, indent=2, default=str),
+                "```",
+                "",
+            ]
+        )
+    lines.extend(["## Phase results", ""])
     for r in results:
         lines.append(_format_result(r))
     lines.append("## Artifacts")
@@ -453,7 +542,11 @@ def write_report(
 
     report_path.write_text("\n".join(lines))
     (out_dir / "phase_results.json").write_text(
-        json.dumps([asdict(r) for r in results], indent=2, default=str)
+        json.dumps(
+            {"probe": probe, "results": [asdict(r) for r in results]},
+            indent=2,
+            default=str,
+        )
     )
     return report_path
 
@@ -504,6 +597,12 @@ async def _amain(args: argparse.Namespace) -> int:
     drain_data_dir = args.out / "phase2_data"
     drain_data_dir.mkdir(parents=True, exist_ok=True)
 
+    # One-shot gateway + GPU probe at the top of the run so the report
+    # can prove real-vs-mock mode without the reader having to correlate
+    # an external log.
+    probe = await _probe_mode(args.gateway_url, args.token)
+    print(f"[probe] {_summarise_mode(probe)}", flush=True)
+
     phases = [
         ("1", "load_run", lambda: phase1_load_run(args.gateway_url, args.token, phase1_s)),
         ("2", "drain_test", lambda: phase2_drain_test(drain_data_dir)),
@@ -532,7 +631,7 @@ async def _amain(args: argparse.Namespace) -> int:
         )
         results.append(result)
 
-    report = write_report(args.out, results, started_at)
+    report = write_report(args.out, results, started_at, probe=probe)
     print(f"\nReport written to {report}")
     return 0 if all(r.passed or r.skipped for r in results) else 1
 

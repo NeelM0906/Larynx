@@ -76,21 +76,39 @@ cddb642 docs(m8): § 7 amendments — training_worker metrics, §1.7 file list c
 `STAGING_VERIFICATION_REPORT.md` at the repo root has the full
 rendered output. Verdict: **PASS**. Run mode: `--quick`
 (2-minute load window, 100-request memory probe). Total duration
-124.1s.
+147.6s. **Gateway mode: real workers loaded on 2× RTX PRO 6000
+Blackwell (VoxCPM2 on GPU 0, Fun-ASR Nano + MLT-Nano on GPU 1,
+fsmn-vad + ct-punc on CPU) — not mock.** The probe header in the
+report confirms `workers(funasr=ready, vad_punc=ready,
+voxcpm=ready) · gpus=2`.
 
 | Phase | Status | Key numbers |
 |-------|--------|-------------|
-| 1. load_run        | **PASS** | 120 /v1/tts requests, 100% success, 2 /ready checks ok / 0 degraded, per-minute buckets balanced (60/60) |
-| 2. drain_test      | **PASS** | /ready 503 after 0.23s (budget ≤2.0s); process exit after 1.4s (budget ≤35s); exit_code 143 (uvicorn's normal clean-shutdown-after-SIGTERM status) |
-| 3. mem_delta       | **PASS** | 100 /v1/tts calls, 0% RSS growth on all six sampled larynx-matching processes; zero flagged |
+| 1. load_run        | **PASS** | 120 real /v1/tts requests (VoxCPM2 synth), 100% success, 2 /ready checks ok / 0 degraded, per-minute buckets balanced (60/60) |
+| 2. drain_test      | **PASS** | /ready 503 after 0.27s (budget ≤2.0s); process exit after 1.49s (budget ≤35s); exit_code 143 (uvicorn's clean-shutdown-after-SIGTERM status). Subprocess boots in mock mode to avoid VRAM contention with the main real-mode gateway — the drain machinery itself is worker-mode-agnostic |
+| 3. mem_delta       | **PASS** | 100 real /v1/tts calls (VoxCPM2 synth). Gateway RSS held at **4,706.6 MB** with VoxCPM2 loaded — **0% growth** before→after. All six sampled larynx-matching processes reported 0% growth; zero flagged |
 | 4. restart_alerter | **SKIP** | supervisord not installed on run-host. Unit test `test_restart_alerter.py` covers threshold + window logic; end-to-end supervisord → eventlistener path remains a deploy-time manual check |
+
+**Real-mode GPU sampling (Phase 3 before → mid-load):**
+
+| GPU | Memory used | Util before | Util during 100 real TTS | Temperature |
+|-----|-------------|-------------|--------------------------|-------------|
+| 0 (VoxCPM2)        | 80.6 GiB / 97.9 GiB (82%) | 5% | 76% peak | 62 → 72 °C |
+| 1 (Fun-ASR × 2 + vllm KV cache) | 84.7 GiB / 97.9 GiB (87%) | 0% | 0% (TTS load doesn't touch STT) | 44 °C |
+
+The Phase 3 growth check on the main gateway process (pid 3066663, RSS
+4,706.6 MB with VoxCPM2 resident) returned exactly 0.0% growth across
+100 real TTS calls — not a mock artifact.
 
 **Explicit limits of this verification**, consistent with § 7.3's
 scope note: catches Part C hardening regressions within the first
 hour of production + gross memory leaks. Does *not* catch 18-hour GPU
 accumulation, spectral-centroid drift, or slow RSS drift over
 overnight windows. Those remain observed in production monitoring
-rather than pre-ship.
+rather than pre-ship. The short sampling window also can't exercise
+the STT + VAD+punc paths under sustained load — `/v1/stt` traffic is
+not part of Phase 1's mix (TTS-only). Adding it would require a
+longer run to amortize the real STT inference cost.
 
 ---
 
