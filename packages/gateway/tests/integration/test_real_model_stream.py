@@ -456,13 +456,15 @@ async def test_stt_stream_four_concurrent_sessions(live_server: str) -> None:
         )
         all_intervals.extend(intervals)
 
-    # Minimum structural expectation — the system didn't deadlock. If
-    # fun-asr-vllm were truly batching, we'd expect ~720ms cadence; if it
-    # serialises (as observed in M4 on this hardware), cadence stretches
-    # but each session should still complete and produce a final.
+    # After bugs/001's inference lock, all four sessions must complete.
+    # Pre-fix this was `>= 2` (best-effort — we knew 3 of 4 deadlocked);
+    # post-fix the backend serialises cleanly so every session finishes.
+    # Keep the `>=` form rather than `==` so the assertion stays honest
+    # if N is ever raised — "at least this many must succeed" scales,
+    # "exactly this many" doesn't.
     successful = [item for item in results if not isinstance(item, BaseException)]
-    assert len(successful) >= 2, (
-        f"expected ≥ 2 concurrent sessions to complete, got {len(successful)}"
+    assert len(successful) >= 4, (
+        f"expected ≥ 4 concurrent sessions to complete, got {len(successful)}"
     )
 
     if all_intervals:
@@ -480,3 +482,236 @@ async def test_stt_stream_four_concurrent_sessions(live_server: str) -> None:
         # reported so the team can decide whether to accept concurrent STT
         # behaviour as-is or to build a batching coalescer in the worker.
         # (See PRD §10: "Fun-ASR rolling-buffer efficiency" risk.)
+
+
+# ---------------------------------------------------------------------------
+# bugs/001 regression — concurrent transcribe_rolling must not deadlock
+#
+# This test exercises the primary bug without the WS layer. It pokes the
+# process-wide FunASRClient directly with four concurrent transcribe_rolling
+# calls and asserts all four return. Before the fix they deadlock: vLLM's
+# shared LLM instance can't absorb concurrent .inference() calls from
+# multiple asyncio.to_thread worker threads, and 3 of 4 hang indefinitely.
+# See bugs/001_concurrent_stt.md § 2.2 for the evidence trail.
+# ---------------------------------------------------------------------------
+
+
+async def test_stt_concurrent_transcribe_rolling_does_not_deadlock(
+    live_server: str,
+) -> None:
+    # Reach through to the live gateway's shared FunASRClient so we're
+    # hitting the exact same client instance WS sessions share. The
+    # larynx_gateway.main module exposes `app` at module scope; the
+    # live_server fixture's uvicorn run populates app.state during lifespan.
+    from larynx_gateway.main import app
+
+    funasr_client = app.state.funasr_client
+    assert funasr_client is not None, (
+        "app.state.funasr_client missing — lifespan didn't populate it?"
+    )
+
+    # Synthesize a known-good short sample via the real TTS path.
+    phrase = "Testing concurrent inference race condition."
+    wav = await _tts_request(live_server, phrase, sample_rate=24000)
+    pcm = _wav_to_pcm16_16k(wav)
+
+    async def one_call() -> str:
+        r = await funasr_client.transcribe_rolling(
+            pcm_s16le=pcm,
+            sample_rate=16000,
+            language="en",
+            hotwords=[],
+            itn=True,
+            prev_text="",
+            is_final=True,
+            drop_tail_tokens=5,
+        )
+        return r.text
+
+    # Warm the backend with one serial call so cold-model cost doesn't
+    # contaminate the concurrency measurement.
+    warm_text = await one_call()
+    assert warm_text, f"warm-up decode produced empty text for {phrase!r}"
+
+    # Four concurrent calls must all complete within 30s. Today they
+    # deadlock and this wait_for expires.
+    results = await asyncio.wait_for(
+        asyncio.gather(*(one_call() for _ in range(4)), return_exceptions=True),
+        timeout=30.0,
+    )
+    errors = [r for r in results if isinstance(r, BaseException)]
+    assert not errors, f"concurrent calls raised: {errors}"
+    for i, text in enumerate(results):
+        assert text, f"concurrent call #{i} produced empty text: {results!r}"
+
+
+# ---------------------------------------------------------------------------
+# 8 concurrent STT sessions — PRD goal 4 proof
+#
+# PRD § 4 asks for ≥ 8 simultaneous conversational sessions without
+# degradation. After bugs/001's serialised-inference fix, per-session
+# partial cadence stretches under contention but every session must
+# still complete. Tolerances are intentionally looser than the 4-session
+# test — 8-way contention puts partials on a ~1s cadence on a single GPU.
+# See bugs/001_concurrent_stt.md § 5.3.
+# ---------------------------------------------------------------------------
+
+
+async def test_stt_stream_eight_concurrent_sessions(live_server: str) -> None:
+    import subprocess
+
+    import websockets
+
+    phrase = "Eight concurrent streaming transcription session test."
+    wav = await _tts_request(live_server, phrase, sample_rate=24000)
+    pcm = _wav_to_pcm16_16k(wav)
+
+    # Poll GPU 1 (Fun-ASR's pinned device) every 500ms so the verification
+    # report can cite min/mean/max utilisation during the 8-way load.
+    gpu_samples: list[float] = []
+    gpu_shutdown = asyncio.Event()
+
+    async def gpu_sampler() -> None:
+        while not gpu_shutdown.is_set():
+            try:
+                r = await asyncio.to_thread(
+                    subprocess.run,
+                    [
+                        "nvidia-smi",
+                        "--id=1",
+                        "--query-gpu=utilization.gpu",
+                        "--format=csv,noheader,nounits",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=1.0,
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    gpu_samples.append(float(r.stdout.strip()))
+            except Exception:  # nvidia-smi may hiccup under load; don't abort
+                pass
+            try:
+                await asyncio.wait_for(gpu_shutdown.wait(), timeout=0.5)
+            except TimeoutError:
+                pass
+
+    async def run_one(i: int) -> tuple[int, list[float], list[str]]:
+        url = f"{live_server}/v1/stt/stream?token={TEST_TOKEN}"
+        intervals_out: list[float] = []
+        kinds: list[str] = []
+        async with websockets.connect(url, max_size=None) as ws:
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "config",
+                        "sample_rate": 16000,
+                        "language": "en",
+                        "chunk_interval_ms": 720,
+                    }
+                )
+            )
+            frame_bytes = 16000 * 20 // 1000 * 2
+
+            async def sender() -> None:
+                for k in range(0, len(pcm), frame_bytes):
+                    await ws.send(pcm[k : k + frame_bytes])
+                    await asyncio.sleep(0.020)
+                for _ in range(60):  # 1.2s trailing silence
+                    await ws.send(b"\x00\x00" * (16000 * 20 // 1000))
+                    await asyncio.sleep(0.020)
+                await ws.send(json.dumps({"type": "stop"}))
+
+            send_task = asyncio.create_task(sender())
+            last_partial: float | None = None
+            try:
+                while True:
+                    # 60s per-event timeout — 8-way serialised decode can
+                    # push a single session's final well past 30s.
+                    raw = await asyncio.wait_for(ws.recv(), timeout=60.0)
+                    if isinstance(raw, bytes):
+                        continue
+                    msg = json.loads(raw)
+                    kinds.append(msg["type"])
+                    if msg["type"] == "partial":
+                        now = time.monotonic()
+                        if last_partial is not None:
+                            intervals_out.append(now - last_partial)
+                        last_partial = now
+                    elif msg["type"] == "final":
+                        break
+            finally:
+                send_task.cancel()
+                try:
+                    await send_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+        return (i, intervals_out, kinds)
+
+    sampler_task = asyncio.create_task(gpu_sampler(), name="gpu-sampler")
+    t0 = time.monotonic()
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(*(run_one(i) for i in range(8)), return_exceptions=True),
+            timeout=90.0,
+        )
+    finally:
+        gpu_shutdown.set()
+        try:
+            await asyncio.wait_for(sampler_task, timeout=2.0)
+        except (TimeoutError, asyncio.CancelledError):
+            sampler_task.cancel()
+    wall = time.monotonic() - t0
+
+    # Report before asserting so failures still yield the numbers.
+    all_intervals: list[float] = []
+    finals_count = 0
+    failed: list[tuple[int, str]] = []
+    succeeded: list[tuple[int, list[float], list[str]]] = []
+    for idx, item in enumerate(results):
+        if isinstance(item, BaseException):
+            failed.append((idx, f"{type(item).__name__}: {item}"))
+            continue
+        _, intervals, kinds = item
+        succeeded.append(item)
+        finals_count += len([k for k in kinds if k == "final"])
+        all_intervals.extend(intervals)
+        print(
+            f"[stt_8concurrent][{idx}] kinds={kinds} "
+            f"intervals={[f'{x * 1000:.0f}ms' for x in intervals]}"
+        )
+    for idx, err in failed:
+        print(f"[stt_8concurrent] session {idx} failed: {err}")
+
+    if gpu_samples:
+        gpu_min = min(gpu_samples)
+        gpu_mean = sum(gpu_samples) / len(gpu_samples)
+        gpu_max = max(gpu_samples)
+        print(
+            f"[stt_8concurrent] GPU1 util min={gpu_min:.0f}% "
+            f"mean={gpu_mean:.0f}% max={gpu_max:.0f}% n={len(gpu_samples)}"
+        )
+    print(f"[stt_8concurrent] wall={wall:.1f}s finals={finals_count} failed={len(failed)}")
+
+    # Hard gates.
+    assert not failed, f"{len(failed)} of 8 sessions failed: {failed}"
+    assert len(succeeded) == 8
+    for idx, _, kinds in succeeded:
+        assert "final" in kinds, f"session {idx} did not reach final: kinds={kinds}"
+    assert wall < 90.0, f"wall-clock {wall:.1f}s exceeds 90s budget"
+
+    if all_intervals:
+        p50 = statistics.median(all_intervals)
+        p95 = (
+            statistics.quantiles(all_intervals, n=20)[18]
+            if len(all_intervals) >= 20
+            else max(all_intervals)
+        )
+        print(
+            f"[stt_8concurrent] interval p50={p50 * 1000:.0f}ms "
+            f"p95={p95 * 1000:.0f}ms n={len(all_intervals)}"
+        )
+        # Gates per bugs/001 § 5.3. Keep these honest numbers — if we
+        # can't meet them, the follow-on batching-coalescer is the
+        # conversation to have, not a looser threshold.
+        assert p50 <= 1.0, f"p50 partial interval {p50 * 1000:.0f}ms exceeds 1000ms budget"
+        assert p95 <= 1.5, f"p95 partial interval {p95 * 1000:.0f}ms exceeds 1500ms budget"

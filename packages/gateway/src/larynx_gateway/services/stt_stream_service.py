@@ -151,7 +151,12 @@ class STTStreamSession:
             await self._emit({"type": "error", "code": "internal_error", "message": str(e)})
         finally:
             # Final flush: tell VAD this is the end; close any open
-            # utterance as final before we tear down.
+            # utterance as final before we tear down. We tolerate both
+            # WorkerError (backend signalled a problem) and RuntimeError
+            # (the shared worker client was stopped out from under us —
+            # lifespan shutdown racing with an in-flight session). Finally
+            # is cleanup, not a place to raise a new exception over
+            # whatever was already propagating. See bugs/001 § 4.3.
             try:
                 feed = await self._vad.vad_stream_feed(
                     session_id=self._session.session_id,
@@ -159,8 +164,12 @@ class STTStreamSession:
                     is_final=True,
                 )
                 await self._handle_vad_events(feed.events, feed.vad_state, feed.session_ms)
-            except WorkerError:
-                pass
+            except (WorkerError, RuntimeError) as e:
+                log.warning(
+                    "stt_stream.vad_final_flush_failed",
+                    session_id=self._session.session_id,
+                    error=str(e),
+                )
             if self._session.state == "speaking":
                 # VAD didn't close the utterance for us — emit a best-effort
                 # final using all audio received so far as the end mark.
@@ -169,13 +178,24 @@ class STTStreamSession:
                     * (len(self._session.audio_buffer) // self._session.bytes_per_sample)
                     / self._session.cfg.sample_rate
                 )
-                await self._finalise_utterance(
-                    end_ms=end_ms, ordinal=self._session.utterance_ordinal
-                )
+                try:
+                    await self._finalise_utterance(
+                        end_ms=end_ms, ordinal=self._session.utterance_ordinal
+                    )
+                except (WorkerError, RuntimeError) as e:
+                    log.warning(
+                        "stt_stream.finalise_on_close_failed",
+                        session_id=self._session.session_id,
+                        error=str(e),
+                    )
             try:
                 await self._vad.vad_stream_close(session_id=self._session.session_id)
-            except WorkerError:
-                pass
+            except (WorkerError, RuntimeError) as e:
+                log.warning(
+                    "stt_stream.vad_close_failed",
+                    session_id=self._session.session_id,
+                    error=str(e),
+                )
             if self._partial_task is not None:
                 self._partial_task.cancel()
                 try:
@@ -275,6 +295,12 @@ class STTStreamSession:
         except WorkerError as e:
             await self._emit({"type": "error", "code": e.code, "message": e.message})
             return
+        except RuntimeError as e:
+            # Shared worker client was stopped (lifespan shutdown racing
+            # with our in-flight utterance close). Treat the same way we
+            # treat a WorkerError — surface as an error event and bail.
+            await self._emit({"type": "error", "code": "worker_unavailable", "message": str(e)})
+            return
         punct_text = roll.text
         punct_applied = False
         if roll.text.strip():
@@ -282,7 +308,7 @@ class STTStreamSession:
                 punc = await self._vad.punctuate(text=roll.text, language=roll.language)
                 punct_text = punc.text
                 punct_applied = punc.applied
-            except WorkerError:
+            except (WorkerError, RuntimeError):
                 # Keep the un-punctuated text on punc failure; it's better
                 # than dropping the final entirely.
                 pass
@@ -340,6 +366,12 @@ class STTStreamSession:
             except WorkerError as e:
                 await self._emit({"type": "error", "code": e.code, "message": e.message})
                 continue
+            except RuntimeError as e:
+                # Shared client stopped mid-loop (lifespan shutdown). Emit
+                # once and bail so run()'s finally can clean up without
+                # this loop raising past its caller. See bugs/001 § 4.3.
+                await self._emit({"type": "error", "code": "worker_unavailable", "message": str(e)})
+                return
             decode_ms = int((time.monotonic() - t0) * 1000)
             now = time.monotonic()
             interval_ms = int((now - self._session.last_partial_wall) * 1000)

@@ -281,3 +281,76 @@ async def test_partial_ordinal_matches_enclosing_utterance() -> None:
             await srv.stop()
         for cli in to_close[2:]:
             await cli.stop()
+
+
+# ---------------------------------------------------------------------------
+# bugs/001 regression — run()'s finally block must tolerate stopped clients
+#
+# When the gateway lifespan shuts down while a streaming session is still
+# in flight (or, in production, a WS disconnect races with a shutdown),
+# `InProcessWorkerClient.stop()` sets `_dispatcher = None` and any further
+# call to `.request()` raises a RuntimeError. The session's run() finally
+# block used to call `vad_stream_close` unconditionally; the RuntimeError
+# then shadowed the original CancelledError in the stacktrace — noisy and
+# misleading. After the fix, run() should log the cleanup failure and
+# return cleanly. See bugs/001_concurrent_stt.md § 4.3.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stt_stream_run_finally_tolerates_stopped_client() -> None:
+    funasr, vad, to_close = await _spin_up_workers()
+    try:
+        cfg = STTStreamConfig(
+            sample_rate=16000,
+            chunk_interval_ms=500,
+            speech_end_silence_ms=200,
+        )
+        session = STTStreamSession(funasr=funasr, vad=vad, cfg=cfg)
+
+        pcm_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+        async def source():
+            while True:
+                item = await pcm_queue.get()
+                if item is None:
+                    return
+                yield item
+
+        events: list[dict] = []
+
+        async def drain() -> None:
+            async for ev in session.events():
+                events.append(ev)
+
+        drain_task = asyncio.create_task(drain())
+        run_task = asyncio.create_task(session.run(source()))
+
+        # Feed one tone so vad_stream_open + the first feed have completed
+        # — we want the session state to be mid-run, not still starting up,
+        # when we yank the clients out from under it.
+        await pcm_queue.put(_tone(100))
+        await asyncio.sleep(0.1)
+
+        # Mid-session, stop the shared clients. In production this models
+        # a lifespan shutdown racing with an active WS session.
+        await funasr.stop()
+        await vad.stop()
+
+        # End the pcm source so run() exits its outer try and enters the
+        # finally block — which will try to call vad_stream_feed,
+        # finalise_utterance, and vad_stream_close against stopped clients.
+        await pcm_queue.put(None)
+
+        # run() must finish cleanly. Before the fix it raises RuntimeError
+        # from the finally block's vad_stream_close call; after the fix it
+        # logs a warning and returns.
+        await asyncio.wait_for(run_task, timeout=5.0)
+        await asyncio.wait_for(drain_task, timeout=2.0)
+    finally:
+        # Clients already stopped above — just stop the servers.
+        for srv in to_close[:2]:
+            try:
+                await srv.stop()
+            except Exception:
+                pass

@@ -211,12 +211,24 @@ class FunASRBackendReal(FunASRBackend):
         sampling_max_tokens: int = 500,
         sampling_top_p: float = 0.001,
     ) -> None:
+        import asyncio
+
         self._gpu = gpu
         self._gpu_mem = gpu_memory_utilization
         self._max_tokens = sampling_max_tokens
         self._top_p = sampling_top_p
         self._models: dict[FunASRModel, _LoadedModel] = {}
         self._sampling_params: Any | None = None
+        # Model-level lock. FunASRNano wraps a shared vLLM ``LLM``
+        # instance that's not safe to call from multiple threads at once
+        # — under 4-way ``asyncio.to_thread`` contention the underlying
+        # ``.inference()`` hangs inside vLLM with no recovery, starving
+        # every session after the first. Mirrors the pattern the sibling
+        # VAD worker already uses for its own fsmn-vad wrapper; see
+        # ``FunasrStreamingVad._model_lock`` in
+        # ``packages/vad_punc_worker/.../streaming_vad.py`` and
+        # ``bugs/001_concurrent_stt.md`` § 2.2 for the full trace.
+        self._model_lock = asyncio.Lock()
 
     async def load(self) -> None:
         import asyncio
@@ -331,7 +343,8 @@ class FunASRBackendReal(FunASRBackend):
             # with a "text" key (see FunASRNano.inference in Fun-ASR-vllm).
             return res[0][0]["text"]
 
-        text = await asyncio.to_thread(_run)
+        async with self._model_lock:
+            text = await asyncio.to_thread(_run)
         return TranscribeResult(
             text=text,
             language=iso_language or _default_iso_for(model),
@@ -370,7 +383,8 @@ class FunASRBackendReal(FunASRBackend):
             res = loaded.handle.inference(data_in=[audio_t], **inf_kwargs)
             return res[0][0]["text"]
 
-        text = await asyncio.to_thread(_run)
+        async with self._model_lock:
+            text = await asyncio.to_thread(_run)
         if not is_final:
             text = drop_last_n_tokens(text, loaded.tokenizer, drop_tail_tokens)
         return TranscribeResult(
