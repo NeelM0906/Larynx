@@ -2,15 +2,27 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { Brand } from "./brand";
+import { SignOutButton } from "./auth-gate";
 import { cn } from "@/lib/utils";
 import { TABS } from "@/lib/tabs";
+import { getToken } from "@/lib/token";
 
 export function Nav() {
   const pathname = usePathname();
+  const [authed, setAuthed] = useState(false);
+
+  useEffect(() => {
+    const sync = () => setAuthed(Boolean(getToken()));
+    sync();
+    window.addEventListener("larynx:token-changed", sync);
+    return () => window.removeEventListener("larynx:token-changed", sync);
+  }, []);
+
   return (
     <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-xl">
-      <div className="mx-auto max-w-6xl px-8 h-14 flex items-center justify-between">
+      <div className="mx-auto max-w-6xl px-8 h-14 flex items-center justify-between gap-4">
         <Brand />
         <nav className="hidden md:flex items-center gap-1">
           {TABS.map((t) => {
@@ -37,6 +49,9 @@ export function Nav() {
             );
           })}
         </nav>
+        <div className="flex items-center gap-2">
+          {authed && <SignOutButton />}
+        </div>
       </div>
     </header>
   );
