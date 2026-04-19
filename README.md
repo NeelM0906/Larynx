@@ -3,7 +3,7 @@
 Self-hosted voice AI platform (VoxCPM2 TTS + Fun-ASR STT) — single-box,
 GPU-resident, REST + WebSocket.
 
-**Status (2026-04-18).** Branch [`feat/m7-finetune`](https://github.com/NeelM0906/Larynx).
+**Status (2026-04-18).** Branch [`main`](https://github.com/NeelM0906/Larynx).
 All core path-components (M0–M7) are implemented; M8 (batch + OpenAI shim + soak) is in
 design. This README is a living status report; numbers below are measured on real hardware
 on the most recent verified run, not theoretical.
