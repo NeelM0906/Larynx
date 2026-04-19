@@ -121,6 +121,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only load the three upload seeds (useful when the worker's design path is slow).",
     )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Query GET /v1/voices and report which seeds would be created, "
+            "without hitting any mutating endpoint. Useful before an incremental "
+            "re-seed to confirm the library diff."
+        ),
+    )
     return p.parse_args()
 
 
@@ -203,6 +212,20 @@ def design(client: httpx.Client, url: str, token: str, seed: DesignSeed) -> Any:
     return save.json()
 
 
+def _report_plan(existing: set[str], skip_designed: bool) -> tuple[list[str], list[str]]:
+    """Partition the six expected seed names into create/present.
+
+    Returned as ``(missing, present)``. Pure — safe to call from tests.
+    """
+    expected: list[tuple[str, str]] = [(s.name, "upload") for s in UPLOAD_SEEDS]
+    if not skip_designed:
+        expected.extend((s.name, "designed") for s in DESIGN_SEEDS)
+
+    missing = [f"{name} ({kind})" for name, kind in expected if name not in existing]
+    present = [f"{name} ({kind})" for name, kind in expected if name in existing]
+    return missing, present
+
+
 def main() -> int:
     args = parse_args()
     if not args.token:
@@ -217,6 +240,18 @@ def main() -> int:
         except httpx.HTTPError as e:
             print(f"error: cannot reach gateway at {args.gateway_url}: {e}", file=sys.stderr)
             return 3
+
+        if args.dry_run:
+            missing, present = _report_plan(existing, args.skip_designed)
+            print(f"[dry-run] gateway={args.gateway_url}")
+            print(f"[dry-run] existing voices ({len(existing)}): {sorted(existing)}")
+            for name in present:
+                print(f"[dry-run] [skip]   {name}  — already exists")
+            for name in missing:
+                print(f"[dry-run] [create] {name}")
+            if not missing:
+                print("[dry-run] all six seed voices already present; nothing to do")
+            return 0
 
         for seed in UPLOAD_SEEDS:
             if seed.name in existing:
