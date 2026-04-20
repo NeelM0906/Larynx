@@ -277,6 +277,14 @@ class FunASRBackendReal(FunASRBackend):
                 enable_prompt_embeds=True,
                 gpu_memory_utilization=self._gpu_mem,
                 dtype="bfloat16",
+                # Audio-embed sequences Fun-ASR processes per call are
+                # << 1 k tokens. The model's native max_position_embeddings
+                # is 40 k, which forces vLLM to reserve ~4 GiB of KV cache
+                # just to satisfy "fit at least one request at max len".
+                # Cap to something generous-but-sane so modest
+                # gpu_memory_utilization values still boot on multi-tenant
+                # cards.
+                max_model_len=8192,
             )
         nano.vllm = nano_vllm
         nano.vllm_sampling_params = SamplingParams(top_p=self._top_p, max_tokens=self._max_tokens)
@@ -295,6 +303,7 @@ class FunASRBackendReal(FunASRBackend):
                 enable_prompt_embeds=True,
                 gpu_memory_utilization=self._gpu_mem,
                 dtype="bfloat16",
+                max_model_len=8192,  # see Nano comment above
             )
         mlt.vllm = mlt_vllm
         mlt.vllm_sampling_params = SamplingParams(top_p=self._top_p, max_tokens=self._max_tokens)
