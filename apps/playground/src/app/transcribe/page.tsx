@@ -69,7 +69,7 @@ export default function TranscribePage() {
     <PageShell
       kicker="06 · Transcribe"
       title="Words from audio."
-      intro="Drop a file to transcribe a whole clip, or go live and see Fun-ASR's partials as you speak."
+      intro="Drop a file to transcribe a whole clip, or go live and see partials as you speak."
     >
       <div className="flex flex-col gap-6">
         <ModeToggle mode={mode} setMode={setMode} />
@@ -175,7 +175,7 @@ function LanguageHotwords({
           className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50"
         />
         <span className="text-[11px] text-muted-foreground">
-          Optional — bias Fun-ASR toward proper nouns or jargon.
+          Optional — bias the transcriber toward proper nouns or jargon.
         </span>
       </div>
     </div>
@@ -305,7 +305,7 @@ function UploadFlow({
             <span className="inline-block h-2 w-2 animate-ping rounded-full bg-primary" />
             {uploadPct !== null && uploadPct < 100
               ? `Uploading ${uploadPct}%`
-              : "Running Fun-ASR."}
+              : "Transcribing."}
           </span>
         )}
       </div>
@@ -664,7 +664,7 @@ function LiveTranscript({ segments }: { segments: LiveSegment[] }) {
   if (segments.length === 0) {
     return (
       <div className="flex min-h-32 items-center justify-center rounded-md border border-dashed border-border p-8 text-sm text-muted-foreground">
-        Start streaming and Fun-ASR partials will land here as you speak.
+        Start streaming and partials will land here as you speak.
       </div>
     );
   }
